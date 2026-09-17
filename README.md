@@ -27,6 +27,14 @@ Containerized workflow orchestration designed around
 <strong>Amazon EKS</strong>.
 </p>
 
+<br><br>
+
+<img src="./assets/aws-partner-advanced.png"
+     alt="AWS Partner Advanced Tier Services"
+     width="180"/>
+
+<br><br>
+
 <br>
 
 <a href="https://aws.amazon.com/">
