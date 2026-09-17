@@ -6,7 +6,7 @@
 
 <br><br>
 
-<video src="M:\SHOGUN KUBER X (Pipeline Project)\SHOGUN KUBER X\SHOGUN KUBER X.mp4"
+<video src="file:///M:/SHOGUN%20KUBER%20X%20(Pipeline%20Project)/SHOGUN%20KUBER%20X/SHOGUN%20KUBER%20X.mp4"
        controls
        muted
        autoplay
