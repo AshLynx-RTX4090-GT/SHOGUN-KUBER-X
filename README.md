@@ -29,7 +29,7 @@ Containerized workflow orchestration designed around
 
 <br><br>
 
-<img src="./assets/aws-partner-advanced.png"
+<img src="M:\SHOGUN KUBER X (Pipeline Project)\SHOGUN KUBER X\AWS Advance Tier Training BADGE.png"
      alt="AWS Partner Advanced Tier Services"
      width="180"/>
 
