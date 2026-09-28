@@ -7,7 +7,7 @@
 <br><br>
 
 <div align="center">
-  <img src="./assets/Shogun%20Kuber%20X.gif" alt="SHOGUN KUBER X" width="800">
+  <img src="./Shogun%20Kuber%20X.gif" alt="SHOGUN KUBER X" width="800">
 </div>
 
 <br>
@@ -21,6 +21,14 @@ Containerized workflow orchestration designed around
 <strong>Docker</strong>, <strong>Kubernetes</strong> and
 <strong>Amazon EKS</strong>.
 </p>
+
+<br><br>
+
+<img src="./AWS%20Advance%20Tier%20Training%20BADGE.png"
+     alt="AWS Partner Advanced Tier Services"
+     width="180"/>
+
+<br><br>
 
 <br>
 
