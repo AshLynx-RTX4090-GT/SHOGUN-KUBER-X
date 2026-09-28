@@ -1,0 +1,6 @@
+{
+  "name": "Shogun KUBER X",
+  "description": "High-performance dark-themed Kubernetes & Cloud Observability dashboard featuring real-time telemetry analytics, interactive charts, AWS S3 media asset storage manager, DevOps automation, offline syncing, JWT & RBAC security, and multi-channel incident alerts.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

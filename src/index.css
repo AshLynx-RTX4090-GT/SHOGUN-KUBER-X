@@ -1,0 +1,240 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    margin: 0;
+    background: #020617;
+  }
+
+  /* Custom scrollbar for dark dashboard aesthetics */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: rgba(15, 23, 42, 0.6);
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgba(51, 65, 85, 0.8);
+    border-radius: 9999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(100, 116, 139, 1);
+  }
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+button,
+a,
+input,
+select,
+textarea {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button,
+.glass-button {
+  transition: transform 180ms ease, box-shadow 180ms ease, background-color 180ms ease, border-color 180ms ease;
+}
+
+button:not(:disabled):active,
+.glass-button:not(:disabled):active {
+  transform: scale(0.98);
+}
+
+.glass-panel,
+.glass-button {
+  backdrop-filter: blur(18px) saturate(135%);
+  -webkit-backdrop-filter: blur(18px) saturate(135%);
+}
+
+.glass-panel {
+  background: rgba(15, 23, 42, 0.58);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 16px 45px rgba(2, 6, 23, 0.18);
+}
+
+.glass-button {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18), 0 5px 18px rgba(8, 145, 178, 0.12);
+}
+
+.glass-button:hover:not(:disabled) {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28), 0 8px 25px rgba(8, 145, 178, 0.22);
+}
+
+a {
+  text-decoration-line: underline;
+  text-underline-offset: 3px;
+}
+
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 3px solid #facc15;
+  outline-offset: 3px;
+}
+
+.app-shell {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+}
+
+.page-transition {
+  animation: page-enter 260ms ease-out both;
+}
+
+@keyframes page-enter {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.app-shell::before,
+.app-shell::after {
+  content: '';
+  position: fixed;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0;
+  transition: opacity 500ms ease;
+}
+
+.app-shell::before {
+  width: 62vw;
+  height: 48vh;
+  top: 6vh;
+  left: 16vw;
+  background: radial-gradient(ellipse at center, rgba(45, 212, 191, 0.23), rgba(45, 212, 191, 0) 68%);
+  filter: blur(30px);
+  animation: aurora-drift 14s ease-in-out infinite alternate;
+}
+
+.app-shell::after {
+  width: 52vw;
+  height: 42vh;
+  right: -8vw;
+  bottom: 2vh;
+  background: radial-gradient(ellipse at center, rgba(251, 146, 60, 0.19), rgba(251, 146, 60, 0) 70%);
+  filter: blur(34px);
+  animation: aurora-drift-reverse 18s ease-in-out infinite alternate;
+}
+
+.app-shell > * {
+  position: relative;
+  z-index: 1;
+}
+
+.theme-light {
+  background: linear-gradient(135deg, #f7fffc 0%, #effaf7 48%, #fff7ed 100%) !important;
+  color: #172033;
+}
+
+.theme-light .glass-panel {
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 16px 45px rgba(37, 74, 72, 0.12);
+}
+
+.theme-light .glass-button:not(.bg-cyan-500) {
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.theme-light a {
+  font-weight: 650;
+}
+
+.theme-light::before,
+.theme-light::after {
+  opacity: 1;
+}
+
+.theme-light .bg-slate-950,
+.theme-light .bg-slate-950\/40,
+.theme-light .bg-slate-950\/30,
+.theme-light .bg-slate-950\/50,
+.theme-light .bg-slate-900,
+.theme-light .bg-slate-900\/40,
+.theme-light .bg-slate-900\/60,
+.theme-light .bg-slate-900\/95,
+.theme-light .bg-slate-800\/40,
+.theme-light .bg-slate-800\/60,
+.theme-light .bg-slate-800\/80 {
+  background-color: rgba(255, 255, 255, 0.68) !important;
+}
+
+/* Dark-mode utility classes sometimes contain white labels. Recolor only
+   those labels when their parent becomes a light glass surface. */
+.theme-light .bg-slate-950 .text-white,
+.theme-light .bg-slate-950\/40 .text-white,
+.theme-light .bg-slate-950\/30 .text-white,
+.theme-light .bg-slate-950\/50 .text-white,
+.theme-light .bg-slate-900 .text-white,
+.theme-light .bg-slate-900\/40 .text-white,
+.theme-light .bg-slate-900\/60 .text-white,
+.theme-light .bg-slate-900\/95 .text-white {
+  color: #172033 !important;
+}
+
+.theme-light input::placeholder,
+.theme-light textarea::placeholder {
+  color: #64748b !important;
+  opacity: 1;
+}
+
+.theme-light .text-slate-100,
+.theme-light .text-slate-200,
+.theme-light .text-slate-300 {
+  color: #172033 !important;
+}
+
+.theme-light .text-slate-400,
+.theme-light .text-slate-500 {
+  color: #526174 !important;
+}
+
+.theme-light .text-slate-600 {
+  color: #64748b !important;
+}
+
+.theme-light .border-slate-800,
+.theme-light .border-slate-700,
+.theme-light .border-slate-700\/40,
+.theme-light .border-slate-800\/60 {
+  border-color: rgba(148, 163, 184, 0.3) !important;
+}
+
+.theme-light .bg-slate-800,
+.theme-light .bg-slate-700\/30 {
+  background-color: rgba(226, 232, 240, 0.72) !important;
+}
+
+.theme-light .shadow-xl,
+.theme-light .shadow-lg {
+  box-shadow: 0 18px 50px rgba(37, 74, 72, 0.13) !important;
+}
+
+@keyframes aurora-drift {
+  from { transform: translate3d(-8%, -2%, 0) rotate(-4deg) scale(0.92); }
+  to { transform: translate3d(9%, 7%, 0) rotate(5deg) scale(1.08); }
+}
+
+@keyframes aurora-drift-reverse {
+  from { transform: translate3d(5%, 4%, 0) rotate(5deg) scale(1.05); }
+  to { transform: translate3d(-10%, -5%, 0) rotate(-5deg) scale(0.9); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-shell::before,
+  .app-shell::after {
+    animation: none;
+  }
+}

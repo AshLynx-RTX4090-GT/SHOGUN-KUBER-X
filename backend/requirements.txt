@@ -1,0 +1,6 @@
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.30,<1.0
+SQLAlchemy>=2.0,<3.0
+pydantic-settings>=2.0,<3.0
+razorpay>=1.4,<2.0
+# Production: install psycopg[binary] and set DATABASE_URL to PostgreSQL.
