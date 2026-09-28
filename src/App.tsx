@@ -17,6 +17,7 @@ import { BillingManager } from './components/billing/BillingManager';
 import { ProfileManager } from './components/profile/ProfileManager';
 import { SupportManager } from './components/support/SupportManager';
 import { CollaborationManager } from './components/collaboration/CollaborationManager';
+import { DeliveryDashboard } from './components/deliveries/DeliveryDashboard';
 import { 
   User, 
   UserRole, 
@@ -162,6 +163,7 @@ export default function App() {
     profile: 'Profile & Security Settings',
     support: 'AI Support & Status Center',
     collaboration: 'Collaboration & Version History',
+    deliveries: 'India Delivery Tracking',
   };
 
   return (
@@ -308,6 +310,7 @@ export default function App() {
 
           {currentTab === 'support' && <SupportManager />}
           {currentTab === 'collaboration' && <CollaborationManager />}
+          {currentTab === 'deliveries' && <DeliveryDashboard isDarkMode={isDarkMode} isOnline={isOnline} />}
           </div>
         </main>
       </div>

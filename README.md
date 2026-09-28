@@ -280,6 +280,33 @@ flowchart TD
 
 ---
 
+# 🚚 Delivery Operations
+
+The **Delivery Tracking** module monitors regional endpoints across India, including Delhi, Mumbai, Bengaluru, Hyderabad, and Kolkata. It provides five-second analytics polling, Google Maps endpoint views, urgent browser notifications, JWT-protected status updates, and local cache/offline queue support.
+
+## Run With PostgreSQL
+
+```powershell
+Copy-Item .env.example .env
+docker compose up --build
+```
+
+For the Google Maps view, set `VITE_GOOGLE_MAPS_API_KEY` before building the frontend. The key should be restricted to the Maps Embed API and approved web origins.
+
+## Deploy To AWS EKS
+
+```powershell
+docker build -t shogun-kuber-x .
+aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin YOUR_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com
+docker tag shogun-kuber-x:latest YOUR_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/shogun-kuber-x:latest
+docker push YOUR_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/shogun-kuber-x:latest
+kubectl apply -f infra/eks-app.yaml
+```
+
+Use Amazon RDS for PostgreSQL and Kubernetes Secrets or AWS Secrets Manager for `JWT_SECRET`, `DATABASE_URL`, and Google Maps credentials in production.
+
+---
+
 # 🏗️ GitHub Repository Structure
 
 ```text

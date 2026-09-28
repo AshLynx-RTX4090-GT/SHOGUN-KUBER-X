@@ -6,6 +6,7 @@ import jwt from 'jsonwebtoken';
 import { createHmac, createHash, timingSafeEqual } from 'node:crypto';
 import { S3Client, ListObjectsV2Command, PutObjectCommand, DeleteObjectCommand, GetObjectCommand, ListBucketsCommand, GetBucketVersioningCommand, PutBucketVersioningCommand } from '@aws-sdk/client-s3';
 import { createIntegrationStore } from './backend/integrations-store';
+import { createDeliveriesStore, DeliveryStatus } from './backend/deliveries-store';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -33,6 +34,7 @@ const AWS_ACCOUNT_ID = process.env.AWS_ACCOUNT_ID || '';
 const AWS_BACKUP_PLAN_ARN = process.env.AWS_BACKUP_PLAN_ARN || '';
 const AWS_EBS_SNAPSHOT_VOLUMES = (process.env.AWS_EBS_SNAPSHOT_VOLUMES || '').split(',').map(id => id.trim()).filter(Boolean);
 const integrationStore = createIntegrationStore();
+const deliveriesStore = createDeliveriesStore();
 
 const BILLING_PLANS: Record<string, { name: string; amount: number }> = {
   starter: { name: 'Starter', amount: 199900 },
@@ -295,6 +297,7 @@ const USERS = [
 ];
 
 async function startServer() {
+  await deliveriesStore.init();
   const app = express();
   // Base64 expands payloads by roughly one third; leave room for JSON metadata.
   const requestLimit = `${Math.ceil((MAX_UPLOAD_BYTES * 1.4) / (1024 * 1024))}mb`;
@@ -351,6 +354,29 @@ async function startServer() {
 
   app.get('/api/auth/me', authenticateToken, (req, res) => {
     res.json({ user: (req as any).user });
+  });
+
+  app.get('/api/deliveries', async (_req, res) => {
+    try {
+      res.json({ deliveries: await deliveriesStore.list(), analytics: await deliveriesStore.analytics(), source: process.env.DATABASE_URL ? 'postgresql' : 'development-fallback' });
+    } catch (error) {
+      console.error('Unable to load delivery endpoints:', error);
+      res.status(503).json({ error: 'Delivery data is temporarily unavailable.' });
+    }
+  });
+
+  app.patch('/api/deliveries/:id/status', authenticateToken, async (req, res) => {
+    const status = req.body?.status as DeliveryStatus;
+    const allowed: DeliveryStatus[] = ['pending', 'in_transit', 'delivered', 'delayed'];
+    if (!allowed.includes(status)) return res.status(400).json({ error: 'Invalid delivery status.' });
+    try {
+      const delivery = await deliveriesStore.updateStatus(req.params.id, status, Number(req.body?.progress));
+      if (!delivery) return res.status(404).json({ error: 'Delivery endpoint was not found.' });
+      res.json({ delivery });
+    } catch (error) {
+      console.error('Unable to update delivery status:', error);
+      res.status(503).json({ error: 'Delivery status could not be updated.' });
+    }
   });
 
   // Location is resolved server-side so Google Maps keys never reach the browser.

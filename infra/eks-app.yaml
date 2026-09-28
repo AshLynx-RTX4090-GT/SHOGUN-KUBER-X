@@ -1,0 +1,90 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: shogun-kuber-x
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: shogun-kuber-x-secrets
+  namespace: shogun-kuber-x
+type: Opaque
+stringData:
+  JWT_SECRET: replace-with-a-long-random-secret
+  DATABASE_URL: postgresql://shogun:replace-me@postgres.example.internal:5432/shogun_kuber_x
+  GOOGLE_MAPS_API_KEY: replace-with-server-key
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shogun-kuber-x
+  namespace: shogun-kuber-x
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: shogun-kuber-x
+  template:
+    metadata:
+      labels:
+        app: shogun-kuber-x
+    spec:
+      containers:
+        - name: app
+          image: REPLACE_WITH_ECR_IMAGE
+          ports:
+            - name: http
+              containerPort: 3000
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: PORT
+              value: "3000"
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: shogun-kuber-x-secrets
+                  key: JWT_SECRET
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: shogun-kuber-x-secrets
+                  key: DATABASE_URL
+            - name: GOOGLE_MAPS_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: shogun-kuber-x-secrets
+                  key: GOOGLE_MAPS_API_KEY
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /metrics
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: shogun-kuber-x
+  namespace: shogun-kuber-x
+spec:
+  type: LoadBalancer
+  selector:
+    app: shogun-kuber-x
+  ports:
+    - port: 80
+      targetPort: http
+      protocol: TCP

@@ -14,7 +14,8 @@ import {
   CreditCard,
   UserRound,
   LifeBuoy,
-  UsersRound
+  UsersRound,
+  Truck
 } from 'lucide-react';
 import { SystemMetrics } from '../../types';
 
@@ -30,7 +31,8 @@ export type NavTabId =
   | 'billing'
   | 'profile'
   | 'support'
-  | 'collaboration';
+  | 'collaboration'
+  | 'deliveries';
 
 interface SidebarProps {
   currentTab: NavTabId;
@@ -62,6 +64,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'profile', label: 'Profile & Settings', icon: UserRound, badge: 'Account' },
     { id: 'support', label: 'AI Help & Status', icon: LifeBuoy, badge: '24/7' },
     { id: 'collaboration', label: 'Team & Versions', icon: UsersRound, badge: 'Sync' },
+    { id: 'deliveries', label: 'Delivery Tracking', icon: Truck, badge: 'India' },
   ];
 
   return (

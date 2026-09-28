@@ -1,4 +1,4 @@
-import { AlertItem, MetricHistoryPoint, OfflineQueueItem, S3Bucket, S3MediaObject, SystemMetrics, User } from '../types';
+import { AlertItem, DeliveryAnalytics, DeliveryEndpoint, DeliveryStatus, MetricHistoryPoint, OfflineQueueItem, S3Bucket, S3MediaObject, SystemMetrics, User } from '../types';
 
 const STORAGE_KEYS = {
   TOKEN: 'shogun_jwt_token',
@@ -294,6 +294,38 @@ class ApiService {
     }
   }
 
+  async getDeliveries(): Promise<{ deliveries: DeliveryEndpoint[]; analytics: DeliveryAnalytics }> {
+    try {
+      const response = await fetch('/api/deliveries');
+      if (!response.ok) throw new Error('Failed to fetch delivery endpoints');
+      const data = await response.json();
+      localStorage.setItem(STORAGE_KEYS.OFFLINE_CACHE + '_deliveries', JSON.stringify(data));
+      return data;
+    } catch {
+      const cached = localStorage.getItem(STORAGE_KEYS.OFFLINE_CACHE + '_deliveries');
+      if (cached) return JSON.parse(cached);
+      return { deliveries: [], analytics: { total: 0, delivered: 0, inTransit: 0, delayed: 0, averageProgress: 0, urgent: 0 } };
+    }
+  }
+
+  async updateDeliveryStatus(id: string, status: DeliveryStatus, progress?: number): Promise<DeliveryEndpoint> {
+    if (!this.isOnline) {
+      this.enqueueOfflineItem({ id: `queue-${Date.now()}`, action: 'delivery_status', payload: { id, status, progress }, timestamp: new Date().toISOString(), status: 'pending' });
+      const cached = await this.getDeliveries();
+      const delivery = cached.deliveries.find(item => item.id === id);
+      if (!delivery) throw new Error('Delivery endpoint was not found');
+      return { ...delivery, status, progress: progress ?? delivery.progress, urgent: status === 'delayed', updatedAt: new Date().toISOString() };
+    }
+    const response = await fetch(`/api/deliveries/${encodeURIComponent(id)}/status`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}) },
+      body: JSON.stringify({ status, progress }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Unable to update delivery status');
+    return data.delivery;
+  }
+
   async acknowledgeAlert(id: string): Promise<boolean> {
     if (!this.isOnline) {
       this.enqueueOfflineItem({
@@ -405,6 +437,14 @@ class ApiService {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(item.payload)
           });
+          synced++;
+        } else if (item.action === 'delivery_status') {
+          const response = await fetch(`/api/deliveries/${encodeURIComponent(item.payload.id)}/status`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json', ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}) },
+            body: JSON.stringify({ status: item.payload.status, progress: item.payload.progress }),
+          });
+          if (!response.ok) throw new Error('Delivery status sync failed');
           synced++;
         }
       } catch (err) {

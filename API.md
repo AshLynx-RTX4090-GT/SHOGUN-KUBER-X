@@ -45,6 +45,19 @@ S3 Versioning protects uploaded files from accidental overwrite/delete. EBS snap
 
 `GET /api/location/context?latitude=&longitude=` resolves weather via Open-Meteo. When `GOOGLE_MAPS_API_KEY` is configured server-side, it uses Google Maps Geocoding for country and region detection; otherwise it uses Open-Meteo reverse geocoding. Browser geolocation permission is still required.
 
+## Delivery tracking
+
+- `GET /api/deliveries` returns Indian regional endpoints and live delivery analytics. PostgreSQL is used when `DATABASE_URL` is configured; development falls back to seeded local data.
+- `PATCH /api/deliveries/:id/status` requires a JWT bearer token and accepts `{ "status": "in_transit", "progress": 74 }`.
+- The dashboard polls delivery analytics every five seconds, caches the latest response in local storage, and queues status changes while offline.
+- Set `VITE_GOOGLE_MAPS_API_KEY` to render the Google Maps endpoint view. Restrict the browser key to Maps Embed API and the application's allowed origins.
+
+## Docker and AWS deployment
+
+Local PostgreSQL and the Node service can be started with `docker compose up --build`. Set a strong `JWT_SECRET`, `DATABASE_URL`, and Google Maps key before using a shared environment.
+
+The production image is defined in `Dockerfile`. Build and publish it to ECR, replace `REPLACE_WITH_ECR_IMAGE` in `infra/eks-app.yaml`, create the Kubernetes secret values, and apply the manifest with `kubectl apply -f infra/eks-app.yaml`. Use Amazon RDS for PostgreSQL in production rather than running the database inside the application pod.
+
 ## Billing
 
 `POST /api/payments/create-order`

@@ -100,7 +100,7 @@ export interface AlertItem {
 
 export interface OfflineQueueItem {
   id: string;
-  action: 's3_upload' | 'alert_ack' | 'pod_restart' | 'terraform_apply';
+  action: 's3_upload' | 'alert_ack' | 'delivery_status' | 'pod_restart' | 'terraform_apply';
   payload: any;
   timestamp: string;
   status: 'pending' | 'synced' | 'failed';
@@ -112,4 +112,30 @@ export interface WidgetConfig {
   enabled: boolean;
   order: number;
   description: string;
+}
+
+export type DeliveryStatus = 'pending' | 'in_transit' | 'delivered' | 'delayed';
+
+export interface DeliveryEndpoint {
+  id: string;
+  trackingCode: string;
+  customerName: string;
+  city: string;
+  region: string;
+  latitude: number;
+  longitude: number;
+  status: DeliveryStatus;
+  progress: number;
+  eta: string;
+  updatedAt: string;
+  urgent: boolean;
+}
+
+export interface DeliveryAnalytics {
+  total: number;
+  delivered: number;
+  inTransit: number;
+  delayed: number;
+  averageProgress: number;
+  urgent: number;
 }
