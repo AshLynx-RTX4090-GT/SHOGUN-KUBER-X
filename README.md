@@ -77,19 +77,14 @@ Instead of manually executing individual applications or scripts, SHOGUN KUBER X
 
 A pipeline can contain multiple tasks such as:
 
-```text
-Trigger
-   ↓
-Task A
-   ↓
-Task B
-   ↓
-Task C
-   ↓
-Task D
-   ↓
-Pipeline Complete
-
+```mermaid
+flowchart TD
+    A([🚀 Trigger]) --> B[⚙️ Task A]
+    B --> C[🐳 Task B]
+    C --> D[☸️ Task C]
+    D --> E[☁️ Task D]
+    E --> F([✅ Pipeline Complete])
+```
 ---
 
 # 🛠️ Tools & Technologies Used
@@ -331,3 +326,20 @@ SHOGUN-KUBER-X/
 ├── 📄 README.md
 ├── 📜 LICENSE
 └── 🎥 SHOGUN KUBER X.mp4
+
+```
+<div align="center">
+
+<h2>🛠️ Tools & Technologies</h2>
+
+<img src="https://img.shields.io/badge/Docker-90%25-2496ED?style=for-the-badge&logo=docker&logoColor=white">
+<img src="https://img.shields.io/badge/Kubernetes-90%25-326CE5?style=for-the-badge&logo=kubernetes&logoColor=white">
+<img src="https://img.shields.io/badge/Amazon%20EKS-85%25-FF9900?style=for-the-badge&logo=amazoneks&logoColor=white">
+<img src="https://img.shields.io/badge/Python-80%25-3776AB?style=for-the-badge&logo=python&logoColor=white">
+<img src="https://img.shields.io/badge/YAML-90%25-CB171E?style=for-the-badge&logo=yaml&logoColor=white">
+<img src="https://img.shields.io/badge/Bash-70%25-4EAA25?style=for-the-badge&logo=gnubash&logoColor=white">
+<img src="https://img.shields.io/badge/Git-80%25-F05032?style=for-the-badge&logo=git&logoColor=white">
+<img src="https://img.shields.io/badge/GitHub-80%25-181717?style=for-the-badge&logo=github&logoColor=white">
+
+</div>
+
