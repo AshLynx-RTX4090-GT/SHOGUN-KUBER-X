@@ -6,14 +6,9 @@
 
 <br><br>
 
-<video src="file:///M:/SHOGUN%20KUBER%20X%20(Pipeline%20Project)/SHOGUN%20KUBER%20X/SHOGUN%20KUBER%20X.mp4"
-       controls
-       muted
-       autoplay
-       loop
-       playsinline
-       width="900">
-</video>
+<div align="center">
+  <img src="./Shogun%20Kuber%20X.gif" alt="SHOGUN KUBER X" width="800">
+</div>
 
 <br>
 
