@@ -2,52 +2,108 @@ import React, { useState } from 'react';
 import { 
   Layers, 
   Server, 
+  Search, 
+  RotateCw, 
   Terminal, 
   X, 
-  RotateCw, 
-  Cloud, 
-  ArrowRight, 
-  Check, 
+  Cpu, 
+  HardDrive, 
+  ShieldAlert,
+  Play,
   Copy,
-  ExternalLink,
-  Plus
+  Check
 } from 'lucide-react';
-import { User, AwsAccountStatus, AwsDiscoveryData } from '../../types';
+import { PodItem, User } from '../../types';
 
 interface KubernetesMonitorProps {
   currentUser: User | null;
   isDarkMode: boolean;
-  awsStatus?: AwsAccountStatus | null;
-  discovery?: AwsDiscoveryData | null;
-  onNavigateTab?: (tab: any) => void;
-  onRefreshDiscovery?: () => void;
 }
 
+const INITIAL_PODS: PodItem[] = [
+  { id: 'pod-1', name: 'shogun-api-gateway-7f48b99-xk9m2', namespace: 'production-apps', node: 'worker-node-01', status: 'Running', restarts: 0, cpuCores: '240m', memoryMB: 512, age: '14d 6h', ip: '10.244.1.42' },
+  { id: 'pod-2', name: 'shogun-api-gateway-7f48b99-pw8s1', namespace: 'production-apps', node: 'worker-node-02', status: 'Running', restarts: 0, cpuCores: '215m', memoryMB: 498, age: '14d 6h', ip: '10.244.2.19' },
+  { id: 'pod-3', name: 'telemetry-stream-processor-59db-48vn1', namespace: 'telemetry-kuber', node: 'worker-node-03', status: 'Running', restarts: 1, cpuCores: '680m', memoryMB: 1420, age: '8d 12h', ip: '10.244.3.88' },
+  { id: 'pod-4', name: 's3-media-transcoder-worker-41df-99zt', namespace: 'production-apps', node: 'worker-node-04', status: 'Running', restarts: 2, cpuCores: '950m', memoryMB: 2048, age: '4d 1h', ip: '10.244.4.15' },
+  { id: 'pod-5', name: 'prometheus-server-kuber-x-8d59-ml22', namespace: 'kube-system', node: 'worker-node-05', status: 'Running', restarts: 0, cpuCores: '420m', memoryMB: 1850, age: '22d 4h', ip: '10.244.5.07' },
+  { id: 'pod-6', name: 'grafana-dashboards-ingress-33ff-qp10', namespace: 'kube-system', node: 'worker-node-06', status: 'Running', restarts: 0, cpuCores: '150m', memoryMB: 380, age: '22d 4h', ip: '10.244.6.24' },
+  { id: 'pod-7', name: 's3-archival-sync-cron-trigger-09aa', namespace: 'production-apps', node: 'worker-node-07', status: 'Running', restarts: 0, cpuCores: '80m', memoryMB: 190, age: '1d 18h', ip: '10.244.7.11' },
+  { id: 'pod-8', name: 'elasticsearch-search-index-worker-02', namespace: 'telemetry-kuber', node: 'worker-node-08', status: 'Pending', restarts: 0, cpuCores: '0m', memoryMB: 0, age: '2m 14s', ip: 'Pending' },
+  { id: 'pod-9', name: 'event-bridge-sns-dispatcher-01ba', namespace: 'production-apps', node: 'worker-node-02', status: 'CrashLoopBackOff', restarts: 5, cpuCores: '40m', memoryMB: 95, age: '35m', ip: '10.244.2.82' },
+];
+
+const MOCK_NODES = [
+  { name: 'worker-node-01', status: 'Ready', role: 'Compute Node', cpuAllocated: '62%', memAllocated: '71%', kubelet: 'v1.31.2' },
+  { name: 'worker-node-02', status: 'Ready', role: 'Compute Node', cpuAllocated: '58%', memAllocated: '64%', kubelet: 'v1.31.2' },
+  { name: 'worker-node-03', status: 'Ready', role: 'Compute Node', cpuAllocated: '74%', memAllocated: '82%', kubelet: 'v1.31.2' },
+  { name: 'worker-node-04', status: 'Ready', role: 'Compute Node', cpuAllocated: '49%', memAllocated: '55%', kubelet: 'v1.31.2' },
+  { name: 'worker-node-05', status: 'Ready', role: 'Observability', cpuAllocated: '68%', memAllocated: '78%', kubelet: 'v1.31.2' },
+  { name: 'worker-node-06', status: 'Ready', role: 'Observability', cpuAllocated: '42%', memAllocated: '51%', kubelet: 'v1.31.2' },
+  { name: 'worker-node-07', status: 'Ready', role: 'Storage Worker', cpuAllocated: '35%', memAllocated: '46%', kubelet: 'v1.31.2' },
+  { name: 'worker-node-08', status: 'Ready', role: 'Batch Processing', cpuAllocated: '80%', memAllocated: '89%', kubelet: 'v1.31.2' },
+];
+
 export const KubernetesMonitor: React.FC<KubernetesMonitorProps> = ({
+  currentUser,
   isDarkMode,
-  awsStatus,
-  discovery,
-  onNavigateTab,
-  onRefreshDiscovery,
 }) => {
-  const isAwsConnected = awsStatus?.connected === true;
-  const eksClusters = discovery?.eksClusters || [];
-  const ec2Nodes = discovery?.ec2Instances || [];
-  const [selectedCluster, setSelectedCluster] = useState<string>(eksClusters[0]?.name || '');
-  const [copiedCli, setCopiedCli] = useState(false);
-  const [activeLogItem, setActiveLogItem] = useState<string | null>(null);
+  const [pods, setPods] = useState<PodItem[]>(INITIAL_PODS);
+  const [selectedNamespace, setSelectedNamespace] = useState<string>('all');
+  const [selectedStatus, setSelectedStatus] = useState<string>('all');
+  const [searchPodQuery, setSearchPodQuery] = useState('');
+  const [activeLogPod, setActiveLogPod] = useState<PodItem | null>(null);
+  const [copiedLog, setCopiedLog] = useState(false);
+  const [restartingPodId, setRestartingPodId] = useState<string | null>(null);
 
-  const EKS_CLI_COMMAND = `aws eks create-cluster \\
-  --name shogun-kuber-cluster \\
-  --region ${awsStatus?.region || 'us-east-1'} \\
-  --kubernetes-version 1.31 \\
-  --role-arn ${awsStatus?.arn || 'arn:aws:iam::YOUR_ACCOUNT:role/eks-service-role'} \\
-  --resources-vpc-config subnetIds=subnet-xxx,subnet-yyy,securityGroupIds=sg-zzz`;
+  const canManagePods = currentUser?.permissions.includes('cluster:write') || currentUser?.role === 'super_admin';
 
-  const handleCopyCli = () => {
-    navigator.clipboard.writeText(EKS_CLI_COMMAND);
-    setCopiedCli(true);
-    setTimeout(() => setCopiedCli(false), 2000);
+  const filteredPods = pods.filter(pod => {
+    if (selectedNamespace !== 'all' && pod.namespace !== selectedNamespace) return false;
+    if (selectedStatus !== 'all' && pod.status !== selectedStatus) return false;
+    if (searchPodQuery) {
+      const q = searchPodQuery.toLowerCase();
+      return pod.name.toLowerCase().includes(q) || pod.node.toLowerCase().includes(q) || pod.ip.toLowerCase().includes(q);
+    }
+    return true;
+  });
+
+  const handleRestartPod = (podId: string) => {
+    if (!canManagePods) return;
+    setRestartingPodId(podId);
+    setTimeout(() => {
+      setPods(prev => prev.map(p => {
+        if (p.id === podId) {
+          return {
+            ...p,
+            status: 'Running',
+            restarts: p.restarts + 1,
+            age: '10s'
+          };
+        }
+        return p;
+      }));
+      setRestartingPodId(null);
+    }, 1200);
+  };
+
+  const generateMockLogs = (podName: string) => {
+    const time = new Date().toISOString();
+    return [
+      `[${time}] INFO [main] Starting Shogun KUBER container runtime for ${podName}`,
+      `[${time}] INFO [k8s-client] Attached to EKS cluster control plane (v1.31.2-eks)`,
+      `[${time}] INFO [telemetry] Prometheus exporter listening on :9090/metrics`,
+      `[${time}] INFO [s3-client] AWS S3 bucket [kuber-x-media-assets-prod] initialized with SSL`,
+      `[${time}] DEBUG [worker] Healthcheck passed. Status: 200 OK. Latency: 1.8ms`,
+      `[${time}] INFO [http] Serving 14,800 requests/sec with 0.02% variance`,
+      `[${time}] INFO [security] Validated JWT bearer session claims successfully`,
+      `[${time}] INFO [gc] Garbage collection cycle completed in 4.2ms. Memory stable.`
+    ].join('\n');
+  };
+
+  const handleCopyLogs = (logs: string) => {
+    navigator.clipboard.writeText(logs);
+    setCopiedLog(true);
+    setTimeout(() => setCopiedLog(false), 2000);
   };
 
   return (
@@ -60,182 +116,231 @@ export const KubernetesMonitor: React.FC<KubernetesMonitorProps> = ({
             <span>Kubernetes Cluster & Node Pool Monitor</span>
           </h1>
           <p className="text-xs text-slate-400 mt-1">
-            Real EKS clusters and EC2 worker instances discovered directly from your AWS Management Account.
+            Real-time multi-node cluster topology, live container log streams, and self-healing orchestration.
           </p>
         </div>
 
         <div className="flex items-center gap-2 text-xs font-mono">
-          <span className="px-2.5 py-1 rounded bg-emerald-950/60 text-emerald-400 border border-emerald-800 flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-            <span>Region: {awsStatus?.region || 'ap-south-1'}</span>
+          <span className="px-2.5 py-1 rounded bg-emerald-950/60 text-emerald-400 border border-emerald-800">
+            Cluster: shogun-prod-us-east
           </span>
-
-          {onRefreshDiscovery && (
-            <button
-              onClick={onRefreshDiscovery}
-              className="p-1.5 rounded bg-slate-800 text-slate-400 hover:text-slate-200 cursor-pointer"
-              title="Refresh Discovery"
-            >
-              <RotateCw className="w-3.5 h-3.5" />
-            </button>
-          )}
+          <span className="px-2.5 py-1 rounded bg-slate-800 text-slate-300">
+            v1.31.2-eks
+          </span>
         </div>
       </div>
 
-      {/* Real EKS Clusters in AWS Account */}
-      {isAwsConnected && (
-        <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-xs font-mono uppercase tracking-wider text-slate-400 font-bold flex items-center gap-1.5">
-              <Layers className="w-4 h-4 text-emerald-400" />
-              <span>Real EKS Clusters ({eksClusters.length} Found in AWS {awsStatus?.region})</span>
-            </h2>
-            <span className="text-xs text-slate-500 font-mono">Live Amazon EKS API</span>
-          </div>
+      {/* Node Pool Health Matrix */}
+      <div>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-xs font-bold font-mono uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+            <Server className="w-4 h-4 text-cyan-400" />
+            <span>Active Worker Nodes (8 Instances)</span>
+          </h2>
+          <span className="text-xs text-slate-500 font-mono">Managed EKS Node Group</span>
+        </div>
 
-          {eksClusters.length === 0 ? (
-            <div className="p-8 text-center rounded-xl border border-dashed border-slate-800 bg-slate-900/30 space-y-3">
-              <Layers className="w-8 h-8 mx-auto text-slate-600" />
-              <h3 className="text-sm font-bold text-slate-200">0 EKS Clusters Found in Your AWS Account</h3>
-              <p className="text-xs text-slate-400 max-w-lg mx-auto leading-relaxed">
-                You have zero EKS clusters in region <strong className="text-slate-200 font-mono">{awsStatus?.region}</strong>. When you create an EKS cluster in the AWS Console, AWS CLI, or Terraform, it will appear here immediately upon discovery!
-              </p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          {MOCK_NODES.map(node => (
+            <div
+              key={node.name}
+              className={`p-3.5 rounded-xl border text-xs transition-all ${
+                isDarkMode ? 'bg-slate-900/60 border-slate-800' : 'bg-white border-slate-200 shadow-sm'
+              }`}
+            >
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="font-mono font-bold text-slate-200">{node.name}</span>
+                <span className="flex items-center gap-1 text-[10px] font-mono text-emerald-400">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                  {node.status}
+                </span>
+              </div>
+              <div className="text-[11px] text-slate-400 mb-2">{node.role}</div>
 
-              {/* Copyable AWS CLI Command */}
-              <div className="max-w-lg mx-auto text-left pt-2">
-                <div className="flex items-center justify-between text-[11px] font-mono text-slate-400 mb-1">
-                  <span>Create EKS Cluster via AWS CLI:</span>
-                  <button
-                    onClick={handleCopyCli}
-                    className="flex items-center gap-1 text-cyan-400 hover:underline cursor-pointer"
-                  >
-                    {copiedCli ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-                    <span>{copiedCli ? 'Copied' : 'Copy'}</span>
-                  </button>
+              <div className="grid grid-cols-2 gap-2 font-mono text-[11px]">
+                <div className="bg-slate-800/40 p-1.5 rounded border border-slate-700/50">
+                  <span className="text-slate-500 block text-[9px]">CPU</span>
+                  <span className="text-cyan-400 font-bold">{node.cpuAllocated}</span>
                 </div>
-                <pre className="p-3 rounded-lg bg-slate-950 border border-slate-800 font-mono text-[11px] text-slate-300 overflow-x-auto">
-                  {EKS_CLI_COMMAND}
-                </pre>
+                <div className="bg-slate-800/40 p-1.5 rounded border border-slate-700/50">
+                  <span className="text-slate-500 block text-[9px]">RAM</span>
+                  <span className="text-sky-400 font-bold">{node.memAllocated}</span>
+                </div>
               </div>
             </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {eksClusters.map(c => (
-                <div
-                  key={c.name}
-                  className={`p-4 rounded-xl border text-xs transition-all ${
-                    isDarkMode ? 'bg-slate-900/60 border-slate-800' : 'bg-white border-slate-200 shadow-sm'
-                  }`}
-                >
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="font-bold text-sm text-slate-100 font-mono">{c.name}</span>
-                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase font-mono ${
-                      c.status === 'ACTIVE'
-                        ? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
-                        : 'bg-amber-950 text-amber-400 border border-amber-800'
-                    }`}>
-                      {c.status || 'UNKNOWN'}
-                    </span>
-                  </div>
+          ))}
+        </div>
+      </div>
 
-                  <div className="space-y-1.5 text-[11px] font-mono text-slate-400">
-                    <div>Version: <span className="text-slate-200">v{c.version || '1.31'}</span></div>
-                    <div className="truncate">Endpoint: <span className="text-cyan-400">{c.endpoint || 'Internal'}</span></div>
-                    <div className="truncate">ARN: <span className="text-slate-500">{c.arn}</span></div>
-                    <div>Node Groups: <span className="text-slate-200">{c.nodegroups?.length || 0} active</span></div>
-                  </div>
+      {/* Pods Control Filter Bar */}
+      <div className="p-3.5 rounded-xl border border-slate-800 bg-slate-900/40 flex flex-col md:flex-row md:items-center justify-between gap-3">
+        <div className="flex items-center gap-2 overflow-x-auto text-xs">
+          <span className="text-slate-400 font-mono text-[11px] shrink-0">Namespace:</span>
+          {['all', 'production-apps', 'telemetry-kuber', 'kube-system'].map(ns => (
+            <button
+              key={ns}
+              onClick={() => setSelectedNamespace(ns)}
+              className={`px-2.5 py-1 rounded text-xs font-mono transition-colors cursor-pointer ${
+                selectedNamespace === ns
+                  ? 'bg-emerald-600 text-white font-bold'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+              }`}
+            >
+              {ns}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex items-center gap-2">
+          <div className="relative">
+            <input
+              type="text"
+              placeholder="Search pod name, IP..."
+              value={searchPodQuery}
+              onChange={e => setSearchPodQuery(e.target.value)}
+              className="w-48 sm:w-56 pl-8 pr-3 py-1 text-xs rounded-lg bg-slate-800 border border-slate-700 text-slate-200 placeholder-slate-500 focus:outline-none focus:border-emerald-500"
+            />
+            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2" />
+          </div>
+
+          <select
+            value={selectedStatus}
+            onChange={e => setSelectedStatus(e.target.value)}
+            className="text-xs bg-slate-800 border border-slate-700 text-slate-300 rounded-lg px-2.5 py-1 focus:outline-none"
+          >
+            <option value="all">All States</option>
+            <option value="Running">Running</option>
+            <option value="Pending">Pending</option>
+            <option value="CrashLoopBackOff">CrashLoopBackOff</option>
+          </select>
+        </div>
+      </div>
+
+      {/* Pods Table */}
+      <div className="rounded-xl border border-slate-800 overflow-hidden bg-slate-900/40">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs">
+            <thead className="bg-slate-800/60 text-slate-400 font-mono uppercase text-[10px]">
+              <tr>
+                <th className="py-2.5 px-4">Pod Name & Namespace</th>
+                <th className="py-2.5 px-3">Node</th>
+                <th className="py-2.5 px-3">Status</th>
+                <th className="py-2.5 px-3 text-right">Restarts</th>
+                <th className="py-2.5 px-3">CPU / Mem</th>
+                <th className="py-2.5 px-3">Age</th>
+                <th className="py-2.5 px-4 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-800 font-mono text-slate-300">
+              {filteredPods.map(pod => {
+                const isRunning = pod.status === 'Running';
+                const isPending = pod.status === 'Pending';
+                const isFailed = pod.status === 'CrashLoopBackOff';
+
+                return (
+                  <tr key={pod.id} className="hover:bg-slate-800/30 transition-colors">
+                    <td className="py-3 px-4">
+                      <div className="font-semibold text-slate-200 font-sans truncate max-w-sm">
+                        {pod.name}
+                      </div>
+                      <div className="text-[10px] text-slate-500 font-mono">
+                        ns: {pod.namespace} · ip: {pod.ip}
+                      </div>
+                    </td>
+                    <td className="py-3 px-3 text-slate-400 text-[11px]">{pod.node}</td>
+                    <td className="py-3 px-3">
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                        isRunning
+                          ? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
+                          : isPending
+                          ? 'bg-amber-950 text-amber-400 border border-amber-800'
+                          : 'bg-rose-950 text-rose-400 border border-rose-800'
+                      }`}>
+                        {pod.status}
+                      </span>
+                    </td>
+                    <td className="py-3 px-3 text-right tabular-nums text-slate-300">
+                      {pod.restarts}
+                    </td>
+                    <td className="py-3 px-3 text-[11px] text-slate-300">
+                      {pod.cpuCores} / {pod.memoryMB} MB
+                    </td>
+                    <td className="py-3 px-3 text-[11px] text-slate-400">{pod.age}</td>
+                    <td className="py-3 px-4 text-right">
+                      <div className="flex items-center justify-end gap-2">
+                        <button
+                          onClick={() => setActiveLogPod(pod)}
+                          className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] flex items-center gap-1 transition-colors"
+                          title="View Live Container Logs"
+                        >
+                          <Terminal className="w-3 h-3 text-cyan-400" />
+                          <span>Logs</span>
+                        </button>
+
+                        {canManagePods && (
+                          <button
+                            onClick={() => handleRestartPod(pod.id)}
+                            disabled={restartingPodId === pod.id}
+                            className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-emerald-400 transition-colors"
+                            title="Restart Pod"
+                          >
+                            <RotateCw className={`w-3.5 h-3.5 ${restartingPodId === pod.id ? 'animate-spin text-emerald-400' : ''}`} />
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Live Container Logs Modal */}
+      {activeLogPod && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-950 border border-slate-800 rounded-2xl max-w-4xl w-full overflow-hidden shadow-2xl flex flex-col max-h-[85vh]">
+            <div className="p-3 border-b border-slate-800 flex items-center justify-between bg-slate-900">
+              <div className="flex items-center gap-2">
+                <Terminal className="w-4 h-4 text-cyan-400" />
+                <span className="text-xs font-mono font-bold text-slate-200">
+                  kubectl logs {activeLogPod.name} -n {activeLogPod.namespace}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => handleCopyLogs(generateMockLogs(activeLogPod.name))}
+                  className="px-2 py-1 rounded bg-slate-800 text-slate-300 text-xs flex items-center gap-1 hover:bg-slate-700"
+                >
+                  {copiedLog ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                  <span>{copiedLog ? 'Copied' : 'Copy'}</span>
+                </button>
+                <button
+                  onClick={() => setActiveLogPod(null)}
+                  className="p-1 text-slate-400 hover:text-slate-100 rounded"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            <div className="p-4 bg-black font-mono text-xs text-slate-300 overflow-y-auto flex-1 space-y-1 select-text">
+              {generateMockLogs(activeLogPod.name).split('\n').map((line, idx) => (
+                <div key={idx} className="hover:bg-slate-900/60 px-1 rounded leading-relaxed">
+                  <span className="text-slate-500 mr-2">{idx + 1}</span>
+                  {line.includes('INFO') && <span className="text-cyan-400">{line}</span>}
+                  {line.includes('DEBUG') && <span className="text-slate-400">{line}</span>}
+                  {line.includes('WARN') && <span className="text-amber-400">{line}</span>}
+                  {line.includes('ERROR') && <span className="text-rose-400">{line}</span>}
                 </div>
               ))}
             </div>
-          )}
-        </div>
-      )}
 
-      {/* Real EC2 Instances Acting as Compute Nodes */}
-      {isAwsConnected && (
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <h2 className="text-xs font-mono uppercase tracking-wider text-slate-400 font-bold flex items-center gap-1.5">
-              <Server className="w-4 h-4 text-cyan-400" />
-              <span>Real EC2 Compute Nodes ({ec2Nodes.length} Discovered in AWS)</span>
-            </h2>
-            <span className="text-xs text-slate-500 font-mono">Live Amazon EC2 API</span>
-          </div>
-
-          {ec2Nodes.length === 0 ? (
-            <div className="p-8 text-center rounded-xl border border-dashed border-slate-800 bg-slate-900/30 text-slate-400 text-xs">
-              <Server className="w-8 h-8 mx-auto mb-2 text-slate-600" />
-              <p className="font-semibold text-slate-300">0 EC2 Instances in region {awsStatus?.region}</p>
-              <p className="mt-1 text-slate-500">Launch an EC2 worker node in your AWS Management Console to see it appear live.</p>
+            <div className="p-2.5 bg-slate-900 border-t border-slate-800 flex items-center justify-between text-[11px] text-slate-500 font-mono">
+              <span>Streaming: stdout & stderr connected</span>
+              <span>Buffer: 100 lines · Auto-tail: On</span>
             </div>
-          ) : (
-            <div className="rounded-xl border border-slate-800 overflow-hidden bg-slate-900/40">
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs font-mono">
-                  <thead className="bg-slate-800/60 text-slate-400 uppercase text-[10px]">
-                    <tr>
-                      <th className="py-2.5 px-4 font-sans">Instance ID & Name</th>
-                      <th className="py-2.5 px-3">Type</th>
-                      <th className="py-2.5 px-3">State</th>
-                      <th className="py-2.5 px-3">Private IP</th>
-                      <th className="py-2.5 px-3">Public IP</th>
-                      <th className="py-2.5 px-3">Launch Time</th>
-                      <th className="py-2.5 px-4 text-right font-sans">Diagnostic</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-800 text-slate-300">
-                    {ec2Nodes.map(inst => (
-                      <tr key={inst.instanceId} className="hover:bg-slate-800/30">
-                        <td className="py-3 px-4 font-sans font-semibold text-slate-200">
-                          <div>{inst.name || inst.instanceId}</div>
-                          <div className="text-[10px] text-slate-500 font-mono">{inst.instanceId}</div>
-                        </td>
-                        <td className="py-3 px-3 text-cyan-400">{inst.instanceType || 't3.medium'}</td>
-                        <td className="py-3 px-3">
-                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
-                            inst.state === 'running'
-                              ? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
-                              : 'bg-slate-800 text-slate-400'
-                          }`}>
-                            {inst.state || 'running'}
-                          </span>
-                        </td>
-                        <td className="py-3 px-3">{inst.privateIp || 'N/A'}</td>
-                        <td className="py-3 px-3 text-slate-400">{inst.publicIp || 'Internal'}</td>
-                        <td className="py-3 px-3 text-slate-500 text-[11px]">
-                          {inst.launchTime ? new Date(inst.launchTime).toLocaleDateString() : 'Active'}
-                        </td>
-                        <td className="py-3 px-4 text-right">
-                          <button
-                            onClick={() => setActiveLogItem(`Instance ${inst.instanceId} (${inst.instanceType}) is in state: ${inst.state}. Attached to VPC: ${inst.vpcId || 'default'}.`)}
-                            className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-sans"
-                          >
-                            Inspect
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Quick Diagnostics Modal */}
-      {activeLogItem && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full p-5 space-y-3">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-              <span className="font-bold text-xs text-slate-200">AWS Resource Diagnostics</span>
-              <button onClick={() => setActiveLogItem(null)} className="text-slate-400 hover:text-slate-100">
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-            <p className="text-xs font-mono text-slate-300 leading-relaxed bg-slate-950 p-3 rounded-lg border border-slate-800">
-              {activeLogItem}
-            </p>
           </div>
         </div>
       )}

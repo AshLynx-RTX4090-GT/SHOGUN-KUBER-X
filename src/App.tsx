@@ -13,6 +13,11 @@ import { AlertsManager } from './components/alerts/AlertsManager';
 import { RbacManager } from './components/security/RbacManager';
 import { PrometheusGrafana } from './components/observability/PrometheusGrafana';
 import { WidgetCustomizer } from './components/widgets/WidgetCustomizer';
+import { BillingManager } from './components/billing/BillingManager';
+import { ProfileManager } from './components/profile/ProfileManager';
+import { SupportManager } from './components/support/SupportManager';
+import { CollaborationManager } from './components/collaboration/CollaborationManager';
+import { DeliveryDashboard } from './components/deliveries/DeliveryDashboard';
 import { 
   User, 
   UserRole, 
@@ -21,28 +26,22 @@ import {
   ClusterInfo, 
   AlertItem, 
   WidgetConfig, 
-  OfflineQueueItem,
-  AwsAccountStatus,
-  AwsDiscoveryData
+  OfflineQueueItem 
 } from './types';
 import { api } from './services/api';
 
 const DEFAULT_WIDGETS: WidgetConfig[] = [
-  { id: 'kpi_cards', title: 'Top KPI Metrics (Real S3 Buckets, EKS/EC2 Nodes, CPU, RAM)', enabled: true, order: 0, description: 'Summary cards of real AWS cloud resources and telemetry' },
+  { id: 'kpi_cards', title: 'Top KPI Metrics (CPU, RAM, Pods, S3 Storage)', enabled: true, order: 0, description: 'Summary cards of cluster compute allocation and S3 volume' },
   { id: 'telemetry_chart', title: 'Interactive Real-Time Telemetry Stream', enabled: true, order: 1, description: 'Time-series curve with multi-metric toggle and hover percentile inspection' },
-  { id: 'incident_feed', title: 'Real CloudWatch Alarms & Push Alert Stream', enabled: true, order: 2, description: 'Recent active and acknowledged incident notices dispatched to SNS/Slack' },
-  { id: 'quick_actions', title: 'AWS Cloud Quick Actions', enabled: true, order: 3, description: 'Direct shortcuts to real AWS S3 storage, EKS cluster, and account sync' },
+  { id: 'incident_feed', title: 'Live Incident & Push Alert Stream', enabled: true, order: 2, description: 'Recent active and acknowledged incident notices dispatched to SNS/Slack' },
+  { id: 'quick_actions', title: 'DevOps & Storage Fast Actions', enabled: true, order: 3, description: 'One-click shortcuts to S3 uploads, pod terminal, and CI/CD pipelines' },
 ];
 
 export default function App() {
   const [currentTab, setCurrentTab] = useState<NavTabId>('overview');
-  const [isDarkMode, setIsDarkMode] = useState<boolean>(true);
+  const [isDarkMode, setIsDarkMode] = useState<boolean>(() => localStorage.getItem('shogun_theme') !== 'light');
   const [isOpenMobileNav, setIsOpenMobileNav] = useState<boolean>(false);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
-
-  // AWS Management Account State
-  const [awsStatus, setAwsStatus] = useState<AwsAccountStatus | null>(null);
-  const [discovery, setDiscovery] = useState<AwsDiscoveryData | null>(null);
 
   // Telemetry & Cluster State
   const [metrics, setMetrics] = useState<SystemMetrics | null>(null);
@@ -51,7 +50,7 @@ export default function App() {
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
 
   // Settings & Offline State
-  const [refreshIntervalMs, setRefreshIntervalMs] = useState<number>(5000);
+  const [refreshIntervalMs, setRefreshIntervalMs] = useState<number>(3000);
   const [isOnline, setIsOnline] = useState<boolean>(typeof navigator !== 'undefined' ? navigator.onLine : true);
   const [offlineQueue, setOfflineQueue] = useState<OfflineQueueItem[]>([]);
   const [widgets, setWidgets] = useState<WidgetConfig[]>(() => {
@@ -63,25 +62,14 @@ export default function App() {
     }
   });
 
+  useEffect(() => {
+    localStorage.setItem('shogun_theme', isDarkMode ? 'dark' : 'light');
+  }, [isDarkMode]);
+
   // Handle User Init & Role Change
   const initUser = useCallback(async (role: UserRole = 'super_admin') => {
     const authData = await api.login(role);
     setCurrentUser(authData.user);
-  }, []);
-
-  // Invalidate legacy localStorage cache keys
-  useEffect(() => {
-    const CURRENT_VERSION = 'v4-aws-live-891923193192';
-    if (typeof window !== 'undefined') {
-      const stored = localStorage.getItem('shogun_app_version');
-      if (stored !== CURRENT_VERSION) {
-        localStorage.removeItem('shogun_offline_cache_metrics');
-        localStorage.removeItem('shogun_offline_cache_s3_objects');
-        localStorage.removeItem('shogun_widgets');
-        localStorage.setItem('shogun_app_version', CURRENT_VERSION);
-        setWidgets(DEFAULT_WIDGETS);
-      }
-    }
   }, []);
 
   useEffect(() => {
@@ -91,20 +79,6 @@ export default function App() {
   const handleRoleChange = async (role: UserRole) => {
     await initUser(role);
   };
-
-  // Fetch AWS Live Discovery
-  const fetchAwsDiscovery = useCallback(async () => {
-    try {
-      const [statusRes, discRes] = await Promise.all([
-        api.getAwsStatus(),
-        api.getAwsDiscovery(),
-      ]);
-      setAwsStatus(statusRes);
-      setDiscovery(discRes);
-    } catch (err) {
-      console.warn('AWS Discovery warning:', err);
-    }
-  }, []);
 
   // Fetch telemetry & alerts
   const fetchData = useCallback(async () => {
@@ -132,17 +106,12 @@ export default function App() {
 
   // Polling Effect
   useEffect(() => {
-    fetchAwsDiscovery();
     fetchData();
-
     if (refreshIntervalMs > 0) {
-      const interval = setInterval(() => {
-        fetchAwsDiscovery();
-        fetchData();
-      }, refreshIntervalMs);
+      const interval = setInterval(fetchData, refreshIntervalMs);
       return () => clearInterval(interval);
     }
-  }, [fetchAwsDiscovery, fetchData, refreshIntervalMs]);
+  }, [fetchData, refreshIntervalMs]);
 
   // Network & Offline Queue Listeners
   useEffect(() => {
@@ -163,7 +132,6 @@ export default function App() {
 
   const handleManualSync = async () => {
     await api.flushOfflineQueue();
-    await fetchAwsDiscovery();
     await fetchData();
   };
 
@@ -174,22 +142,12 @@ export default function App() {
 
   const handleTriggerSimulatedAlert = async () => {
     await api.dispatchIncidentAlert({
-      title: 'High CPU Spike Alert: AWS EC2 Instance',
+      title: 'High CPU Spike Alert: worker-node-03',
       severity: 'critical',
-      description: 'CPU threshold exceeded 94% on worker node due to intensive batch processing job.',
+      description: 'CPU threshold exceeded 94% on worker node 03 due to intensive batch video transcoding job.',
       channels: ['slack', 'sns', 'email'],
     });
     await fetchData();
-  };
-
-  const handleSwitchRegion = async (newRegion: string) => {
-    try {
-      await api.switchAwsRegion(newRegion);
-      await fetchAwsDiscovery();
-      await fetchData();
-    } catch (err) {
-      console.warn('Failed to switch region:', err);
-    }
   };
 
   const TAB_TITLES: Record<NavTabId, string> = {
@@ -201,29 +159,15 @@ export default function App() {
     security: 'JWT Security & RBAC',
     observability: 'Prometheus & Grafana',
     widgets: 'Widget Layouts & Sync Settings',
+    billing: 'Plans & Billing',
+    profile: 'Profile & Security Settings',
+    support: 'AI Support & Status Center',
+    collaboration: 'Collaboration & Version History',
+    deliveries: 'India Delivery Tracking',
   };
 
-  // URL Query Parameters Detection (Embed & JWT Token Support)
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const params = new URLSearchParams(window.location.search);
-      const urlToken = params.get('token') || params.get('jwt') || params.get('key') || params.get('apiKey');
-      if (urlToken) {
-        api.setToken(urlToken);
-      }
-      const urlTab = params.get('tab') as NavTabId;
-      if (urlTab && TAB_TITLES[urlTab]) {
-        setCurrentTab(urlTab);
-      }
-      const urlRegion = params.get('region');
-      if (urlRegion) {
-        api.switchAwsRegion(urlRegion).catch(() => {});
-      }
-    }
-  }, []);
-
   return (
-    <div className={`min-h-screen flex flex-col font-sans transition-colors duration-200 ${
+    <div className={`app-shell ${isDarkMode ? 'theme-dark' : 'theme-light'} min-h-screen flex flex-col font-sans transition-colors duration-200 ${
       isDarkMode ? 'bg-slate-950 text-slate-100' : 'bg-slate-100 text-slate-900'
     }`}>
       {/* Offline Banner when disconnected */}
@@ -248,10 +192,6 @@ export default function App() {
         onManualSync={handleManualSync}
         activeAlerts={alerts}
         currentTabTitle={TAB_TITLES[currentTab]}
-        awsStatus={awsStatus}
-        discovery={discovery}
-        onNavigateTab={tab => setCurrentTab(tab as any)}
-        onSwitchRegion={handleSwitchRegion}
       />
 
       {/* Responsive App Shell: Vertical Navigation & Main Workspace */}
@@ -264,8 +204,6 @@ export default function App() {
           isOpenMobile={isOpenMobileNav}
           onCloseMobile={() => setIsOpenMobileNav(false)}
           metrics={metrics}
-          awsStatus={awsStatus}
-          discovery={discovery}
         />
 
         {/* Workspace Main Viewport */}
@@ -274,7 +212,7 @@ export default function App() {
           <div className="flex md:hidden items-center justify-between pb-3 border-b border-slate-800">
             <button
               onClick={() => setIsOpenMobileNav(true)}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-slate-800 bg-slate-900 text-xs font-medium text-slate-200 cursor-pointer"
+              className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-slate-800 bg-slate-900 text-xs font-medium text-slate-200"
             >
               <Menu className="w-4 h-4 text-cyan-400" />
               <span>Select Module ({TAB_TITLES[currentTab]})</span>
@@ -282,6 +220,7 @@ export default function App() {
           </div>
 
           {/* Tab Route Switching */}
+          <div key={currentTab} className="page-transition">
           {currentTab === 'overview' && (
             <OverviewDashboard
               metrics={metrics}
@@ -290,12 +229,9 @@ export default function App() {
               alerts={alerts}
               widgets={widgets}
               isDarkMode={isDarkMode}
-              awsStatus={awsStatus}
-              discovery={discovery}
               onNavigateTab={tab => setCurrentTab(tab)}
               onTriggerSimulatedAlert={handleTriggerSimulatedAlert}
               onRefreshMetrics={fetchData}
-              onSwitchRegion={handleSwitchRegion}
             />
           )}
 
@@ -303,10 +239,6 @@ export default function App() {
             <KubernetesMonitor
               currentUser={currentUser}
               isDarkMode={isDarkMode}
-              awsStatus={awsStatus}
-              discovery={discovery}
-              onNavigateTab={tab => setCurrentTab(tab)}
-              onRefreshDiscovery={fetchAwsDiscovery}
             />
           )}
 
@@ -315,10 +247,6 @@ export default function App() {
               currentUser={currentUser}
               isDarkMode={isDarkMode}
               isOnline={isOnline}
-              awsStatus={awsStatus}
-              discovery={discovery}
-              onNavigateTab={tab => setCurrentTab(tab)}
-              onRefreshDiscovery={fetchAwsDiscovery}
             />
           )}
 
@@ -326,8 +254,6 @@ export default function App() {
             <DevOpsHub
               currentUser={currentUser}
               isDarkMode={isDarkMode}
-              awsStatus={awsStatus}
-              discovery={discovery}
             />
           )}
 
@@ -368,8 +294,36 @@ export default function App() {
               onToggleDarkMode={() => setIsDarkMode(!isDarkMode)}
             />
           )}
+
+          {currentTab === 'billing' && <BillingManager />}
+
+          {currentTab === 'profile' && (
+            <ProfileManager
+              currentUser={currentUser}
+              onSave={user => {
+                setCurrentUser(user);
+                localStorage.setItem('shogun_user', JSON.stringify(user));
+              }}
+              isDarkMode={isDarkMode}
+            />
+          )}
+
+          {currentTab === 'support' && <SupportManager />}
+          {currentTab === 'collaboration' && <CollaborationManager />}
+          {currentTab === 'deliveries' && <DeliveryDashboard isDarkMode={isDarkMode} isOnline={isOnline} />}
+          </div>
         </main>
       </div>
+
+      <footer className="border-t border-slate-800/70 px-6 py-8 md:px-10 text-center">
+        <div className="text-3xl md:text-5xl font-black tracking-[0.08em] text-cyan-400">Lynx Cloud Co.</div>
+        <div className="mt-3 flex flex-wrap justify-center gap-x-4 gap-y-2 text-xs text-slate-400">
+          <a href="#privacy" className="text-cyan-400 underline underline-offset-2">Privacy</a>
+          <a href="#terms" className="text-amber-400 underline underline-offset-2">Terms</a>
+          <a href="#support" className="text-fuchsia-400 underline underline-offset-2">Support</a>
+        </div>
+        <p className="mt-3 text-[11px] text-slate-500">Disclaimer: Dashboard data is for operational planning and demonstration. &copy; 2026 Lynx Cloud Co. All rights reserved.</p>
+      </footer>
     </div>
   );
 }

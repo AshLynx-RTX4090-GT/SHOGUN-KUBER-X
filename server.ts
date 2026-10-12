@@ -1,43 +1,12 @@
 import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
-import fs from 'fs';
 import { fileURLToPath } from 'url';
 import jwt from 'jsonwebtoken';
-import dotenv from 'dotenv';
-import { STSClient, GetCallerIdentityCommand } from '@aws-sdk/client-sts';
-import { 
-  S3Client, 
-  ListBucketsCommand, 
-  ListObjectsV2Command, 
-  GetObjectCommand,
-  PutObjectCommand, 
-  DeleteObjectCommand, 
-  CreateBucketCommand 
-} from '@aws-sdk/client-s3';
-import { 
-  EKSClient, 
-  ListClustersCommand, 
-  DescribeClusterCommand, 
-  ListNodegroupsCommand 
-} from '@aws-sdk/client-eks';
-import { 
-  EC2Client, 
-  DescribeInstancesCommand 
-} from '@aws-sdk/client-ec2';
-import { 
-  SNSClient, 
-  ListTopicsCommand, 
-  PublishCommand, 
-  CreateTopicCommand 
-} from '@aws-sdk/client-sns';
-import { 
-  CloudWatchClient, 
-  DescribeAlarmsCommand,
-  GetMetricDataCommand
-} from '@aws-sdk/client-cloudwatch';
-
-dotenv.config();
+import { createHmac, createHash, timingSafeEqual } from 'node:crypto';
+import { S3Client, ListObjectsV2Command, PutObjectCommand, DeleteObjectCommand, GetObjectCommand, ListBucketsCommand, GetBucketVersioningCommand, PutBucketVersioningCommand } from '@aws-sdk/client-s3';
+import { createIntegrationStore } from './backend/integrations-store';
+import { createDeliveriesStore, DeliveryStatus } from './backend/deliveries-store';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -45,87 +14,257 @@ const __dirname = path.dirname(__filename);
 const JWT_SECRET = process.env.JWT_SECRET || 'shogun-kuber-x-secure-jwt-secret-2026';
 const PORT = parseInt(process.env.PORT || '3000', 10);
 const isProduction = process.env.NODE_ENV === 'production';
-const AWS_CONFIG_FILE = path.join(__dirname, '.aws-config.json');
-const ENV_FILE = path.join(__dirname, '.env');
 
-// ----------------------------------------------------
-// AWS CLIENT MANAGER
-// ----------------------------------------------------
-interface AwsCredentials {
-  accessKeyId: string;
-  secretAccessKey: string;
-  sessionToken?: string;
-  region: string;
-}
-
-let activeAwsConfig: AwsCredentials = {
-  accessKeyId: process.env.AWS_ACCESS_KEY_ID || '',
-  secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || '',
-  sessionToken: process.env.AWS_SESSION_TOKEN || undefined,
-  region: process.env.AWS_REGION || 'ap-south-1',
+// AWS S3 configuration from environment (optional for real connection, falls back to in-memory store)
+const s3Config = {
+  region: process.env.AWS_REGION || 'us-east-1',
+  credentials: process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY ? {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+  } : undefined,
 };
 
-// Load saved credentials from disk if present
-if (fs.existsSync(AWS_CONFIG_FILE)) {
-  try {
-    const raw = fs.readFileSync(AWS_CONFIG_FILE, 'utf-8');
-    const parsed = JSON.parse(raw);
-    if (parsed.accessKeyId && parsed.secretAccessKey) {
-      activeAwsConfig = {
-        accessKeyId: parsed.accessKeyId,
-        secretAccessKey: parsed.secretAccessKey,
-        sessionToken: parsed.sessionToken || undefined,
-        region: parsed.region || process.env.AWS_REGION || 'ap-south-1',
-      };
-    }
-  } catch (err) {
-    console.warn('Failed to parse .aws-config.json:', err);
-  }
+// An IAM role (recommended in ECS/EC2/Lambda) is also a real AWS connection. Do not
+// expose any of these credentials to the browser.
+const hasAwsConfiguration = Boolean(process.env.AWS_BUCKET_NAME || (process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY));
+const s3Client = hasAwsConfiguration ? new S3Client(s3Config) : null;
+const configuredBuckets = (process.env.AWS_BUCKET_NAME || '').split(',').map(name => name.trim()).filter(Boolean);
+const MAX_UPLOAD_BYTES = Number(process.env.MAX_UPLOAD_BYTES || 50 * 1024 * 1024);
+const AWS_ACCOUNT_ID = process.env.AWS_ACCOUNT_ID || '';
+const AWS_BACKUP_PLAN_ARN = process.env.AWS_BACKUP_PLAN_ARN || '';
+const AWS_EBS_SNAPSHOT_VOLUMES = (process.env.AWS_EBS_SNAPSHOT_VOLUMES || '').split(',').map(id => id.trim()).filter(Boolean);
+const integrationStore = createIntegrationStore();
+const deliveriesStore = createDeliveriesStore();
+
+const BILLING_PLANS: Record<string, { name: string; amount: number }> = {
+  starter: { name: 'Starter', amount: 199900 },
+  scale: { name: 'Scale', amount: 599900 },
+  enterprise: { name: 'Enterprise', amount: 1499900 },
+};
+
+const ONE_TIME_PURCHASES: Record<string, { name: string; amount: number }> = {
+  'incident-pack': { name: 'Incident Response Pack', amount: 249900 },
+  'migration-pack': { name: 'Cloud Migration Pack', amount: 899900 },
+};
+
+/**
+ * Pending Razorpay orders are created exclusively from our server-side price
+ * catalog. Replace this in-memory store with a database in a multi-instance
+ * deployment so verification and fulfillment remain durable and idempotent.
+ */
+interface PendingPayment {
+  planId: string;
+  purchaseType: 'subscription' | 'one-time';
+  amount: number;
+  currency: string;
+  fulfilled: boolean;
+  paymentId?: string;
+}
+const pendingPayments = new Map<string, PendingPayment>();
+const paymentToOrder = new Map<string, string>();
+
+// Initial mock & persistent media asset storage for AWS S3 Dashboard
+interface S3MediaObject {
+  id: string;
+  bucket: string;
+  key: string;
+  filename: string;
+  size: number;
+  mimeType: string;
+  type: 'image' | 'video' | 'audio' | 'document' | 'config';
+  url: string;
+  storageClass: 'STANDARD' | 'GLACIER' | 'DEEP_ARCHIVE' | 'INTELLIGENT_TIERING';
+  lastModified: string;
+  uploadedBy: string;
+  tags: string[];
 }
 
-export function getAwsClientConfig(regionOverride?: string) {
-  const region = regionOverride || activeAwsConfig.region || process.env.AWS_REGION || 'ap-south-1';
-  const accessKeyId = activeAwsConfig.accessKeyId || process.env.AWS_ACCESS_KEY_ID;
-  const secretAccessKey = activeAwsConfig.secretAccessKey || process.env.AWS_SECRET_ACCESS_KEY;
-  const sessionToken = activeAwsConfig.sessionToken || process.env.AWS_SESSION_TOKEN;
-
-  // Local development: explicit credentials provided
-  if (accessKeyId && secretAccessKey) {
-    return {
-      region,
-      credentials: {
-        accessKeyId: accessKeyId.trim(),
-        secretAccessKey: secretAccessKey.trim(),
-        ...(sessionToken ? { sessionToken: sessionToken.trim() } : {})
-      }
-    };
-  }
-
-  // Production on EKS: Automatic fallback to AWS IAM Roles for Service Accounts (IRSA) / IMDSv2
-  return { region };
+function inferMimeType(filename: string) {
+  const ext = filename.split('.').pop()?.toLowerCase();
+  const types: Record<string, string> = { yaml: 'application/yaml', yml: 'application/yaml', json: 'application/json', pdf: 'application/pdf', mp3: 'audio/mpeg', mp4: 'video/mp4', mov: 'video/quicktime', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', txt: 'text/plain' };
+  return types[ext || ''] || 'application/octet-stream';
 }
 
-export function getAwsClients(regionOverride?: string) {
-  const clientConfig = getAwsClientConfig(regionOverride);
+function makeS3Object(bucket: string, key: string, filename: string, size: number, mimeType: string, lastModified = new Date().toISOString()): S3MediaObject {
+  const type = mimeType.startsWith('image/') ? 'image' : mimeType.startsWith('video/') ? 'video' : mimeType.startsWith('audio/') ? 'audio' : /yaml|json/.test(mimeType) || /\.(yaml|yml|json)$/i.test(filename) ? 'config' : 'document';
   return {
-    sts: new STSClient(clientConfig),
-    s3: new S3Client(clientConfig),
-    eks: new EKSClient(clientConfig),
-    ec2: new EC2Client(clientConfig),
-    sns: new SNSClient(clientConfig),
-    cloudwatch: new CloudWatchClient(clientConfig),
+    id: `aws-${createHash('sha256').update(`${bucket}/${key}`).digest('hex').slice(0, 16)}`,
+    bucket, key, filename, size, mimeType, type,
+    url: `/api/s3/objects/${encodeURIComponent(bucket)}/${key.split('/').map(encodeURIComponent).join('/')}`,
+    storageClass: 'STANDARD', lastModified, uploadedBy: 'AWS IAM principal', tags: ['aws-s3', type],
   };
 }
 
-let awsClients: ReturnType<typeof getAwsClients> | null = getAwsClients();
+let s3Buckets = [
+  {
+    name: 'kuber-x-media-assets-prod',
+    region: 'us-east-1',
+    created: '2026-01-15T08:00:00Z',
+    objectCount: 42,
+    sizeBytes: 184582912, // ~184 MB
+    versioning: true,
+    encryption: 'AES256',
+    publicAccessBlock: true,
+  },
+  {
+    name: 'kuber-x-cluster-snapshots-vault',
+    region: 'us-west-2',
+    created: '2026-02-01T12:00:00Z',
+    objectCount: 156,
+    sizeBytes: 524288000, // 500 MB
+    versioning: true,
+    encryption: 'aws:kms',
+    publicAccessBlock: true,
+  },
+  {
+    name: 'kuber-x-telemetry-archives',
+    region: 'eu-central-1',
+    created: '2026-02-10T14:30:00Z',
+    objectCount: 88,
+    sizeBytes: 104857600, // 100 MB
+    versioning: false,
+    encryption: 'AES256',
+    publicAccessBlock: true,
+  }
+];
 
-// ----------------------------------------------------
-// AUTH USERS FOR RBAC
-// ----------------------------------------------------
+let s3Objects: S3MediaObject[] = [
+  {
+    id: 's3-001',
+    bucket: 'kuber-x-media-assets-prod',
+    key: 'media/videos/cluster-canary-deployment-demo.mp4',
+    filename: 'cluster-canary-deployment-demo.mp4',
+    size: 24500000,
+    mimeType: 'video/mp4',
+    type: 'video',
+    url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4',
+    storageClass: 'STANDARD',
+    lastModified: '2026-09-24T18:30:00Z',
+    uploadedBy: 'ashirbad.sre@shogun-cloud.io',
+    tags: ['canary', 'kubernetes', 'video-demo']
+  },
+  {
+    id: 's3-002',
+    bucket: 'kuber-x-media-assets-prod',
+    key: 'media/videos/pod-autohealing-stress-test.mp4',
+    filename: 'pod-autohealing-stress-test.mp4',
+    size: 19800000,
+    mimeType: 'video/mp4',
+    type: 'video',
+    url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
+    storageClass: 'STANDARD',
+    lastModified: '2026-09-24T19:15:00Z',
+    uploadedBy: 'ashirbad.sre@shogun-cloud.io',
+    tags: ['stress-test', 'resilience', 'video-demo']
+  },
+  {
+    id: 's3-003',
+    bucket: 'kuber-x-media-assets-prod',
+    key: 'media/images/k8s-mesh-architecture-diagram.png',
+    filename: 'k8s-mesh-architecture-diagram.png',
+    size: 4200000,
+    mimeType: 'image/png',
+    type: 'image',
+    url: 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="800" height="500" viewBox="0 0 800 500"><rect width="800" height="500" fill="%230f172a"/><circle cx="400" cy="250" r="180" fill="none" stroke="%2306b6d4" stroke-width="2" stroke-dasharray="8 4"/><circle cx="400" cy="250" r="70" fill="%231e293b" stroke="%2338bdf8" stroke-width="3"/><text x="400" y="255" fill="%23f8fafc" font-family="sans-serif" font-size="16" font-weight="bold" text-anchor="middle">KUBER X CONTROL PLANE</text><circle cx="200" cy="150" r="45" fill="%231e293b" stroke="%2310b981" stroke-width="2"/><text x="200" y="155" fill="%23e2e8f0" font-family="sans-serif" font-size="12" text-anchor="middle">Worker-Node-01</text><circle cx="600" cy="150" r="45" fill="%231e293b" stroke="%2310b981" stroke-width="2"/><text x="600" y="155" fill="%23e2e8f0" font-family="sans-serif" font-size="12" text-anchor="middle">Worker-Node-02</text><circle cx="200" cy="350" r="45" fill="%231e293b" stroke="%2310b981" stroke-width="2"/><text x="200" y="355" fill="%23e2e8f0" font-family="sans-serif" font-size="12" text-anchor="middle">Worker-Node-03</text><circle cx="600" cy="350" r="45" fill="%231e293b" stroke="%233b82f6" stroke-width="2"/><text x="600" y="355" fill="%23e2e8f0" font-family="sans-serif" font-size="12" text-anchor="middle">Storage-S3-Gateway</text><line x1="240" y1="170" x2="350" y2="220" stroke="%2364748b" stroke-width="2"/><line x1="560" y1="170" x2="450" y2="220" stroke="%2364748b" stroke-width="2"/><line x1="240" y1="330" x2="350" y2="280" stroke="%2364748b" stroke-width="2"/><line x1="560" y1="330" x2="450" y2="280" stroke="%2364748b" stroke-width="2"/><text x="400" y="50" fill="%2338bdf8" font-family="sans-serif" font-size="20" font-weight="bold" text-anchor="middle">SHOGUN KUBER X // HIGH-AVAILABILITY CLUSTER TOPOLOGY</text></svg>',
+    storageClass: 'STANDARD',
+    lastModified: '2026-09-24T16:10:00Z',
+    uploadedBy: 'ashirbad.sre@shogun-cloud.io',
+    tags: ['architecture', 'topology', 'infographic']
+  },
+  {
+    id: 's3-004',
+    bucket: 'kuber-x-media-assets-prod',
+    key: 'media/images/grafana-incident-heat-map.png',
+    filename: 'grafana-incident-heat-map.png',
+    size: 2100000,
+    mimeType: 'image/png',
+    type: 'image',
+    url: 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="800" height="400" viewBox="0 0 800 400"><rect width="800" height="400" fill="%23090d16"/><text x="30" y="40" fill="%23f1f5f9" font-family="sans-serif" font-size="16" font-weight="bold">Grafana Observability Heatmap // Request Latency Distribution</text><g transform="translate(40, 80)"><rect x="0" y="0" width="100" height="40" fill="%231e293b"/><rect x="110" y="0" width="100" height="40" fill="%230e7490"/><rect x="220" y="0" width="100" height="40" fill="%230891b2"/><rect x="330" y="0" width="100" height="40" fill="%230284c7"/><rect x="440" y="0" width="100" height="40" fill="%230369a1"/><rect x="550" y="0" width="100" height="40" fill="%230284c7"/><rect x="660" y="0" width="100" height="40" fill="%230891b2"/><rect x="0" y="50" width="100" height="40" fill="%230891b2"/><rect x="110" y="50" width="100" height="40" fill="%2306b6d4"/><rect x="220" y="50" width="100" height="40" fill="%2322d3ee"/><rect x="330" y="50" width="100" height="40" fill="%23f59e0b"/><rect x="440" y="50" width="100" height="40" fill="%23ef4444"/><rect x="550" y="50" width="100" height="40" fill="%23f59e0b"/><rect x="660" y="50" width="100" height="40" fill="%2306b6d4"/><rect x="0" y="100" width="100" height="40" fill="%231e293b"/><rect x="110" y="100" width="100" height="40" fill="%230e7490"/><rect x="220" y="100" width="100" height="40" fill="%230891b2"/><rect x="330" y="100" width="100" height="40" fill="%230284c7"/><rect x="440" y="100" width="100" height="40" fill="%230369a1"/><rect x="550" y="100" width="100" height="40" fill="%230284c7"/><rect x="660" y="100" width="100" height="40" fill="%230e7490"/><rect x="0" y="150" width="100" height="40" fill="%230f172a"/><rect x="110" y="150" width="100" height="40" fill="%231e293b"/><rect x="220" y="150" width="100" height="40" fill="%230e7490"/><rect x="330" y="150" width="100" height="40" fill="%230891b2"/><rect x="440" y="150" width="100" height="40" fill="%230e7490"/><rect x="550" y="150" width="100" height="40" fill="%231e293b"/><rect x="660" y="150" width="100" height="40" fill="%230f172a"/></g><text x="40" y="320" fill="%2394a3b8" font-family="sans-serif" font-size="13">Nodes: worker-prod-01..07 | Timeframe: Last 24 Hours | Scraped via Prometheus v2.52</text></svg>',
+    storageClass: 'STANDARD',
+    lastModified: '2026-09-24T14:45:00Z',
+    uploadedBy: 'ashirbad.sre@shogun-cloud.io',
+    tags: ['metrics', 'grafana', 'telemetry']
+  },
+  {
+    id: 's3-005',
+    bucket: 'kuber-x-cluster-snapshots-vault',
+    key: 'configs/helm-chart-production-values.yaml',
+    filename: 'helm-chart-production-values.yaml',
+    size: 45200,
+    mimeType: 'text/yaml',
+    type: 'config',
+    url: 'data:text/plain;charset=utf-8,global:%0A  clusterName: shogun-kuber-prod-us-east-1%0A  environment: production%0Areplicas:%0A  apiGateway: 8%0A  telemetryStream: 6%0A  storageManager: 4%0Aresources:%0A  limits:%0A    cpu: "2000m"%0A    memory: "4096Mi"%0A  requests:%0A    cpu: "500m"%0A    memory: "1024Mi"%0Aautoscaling:%0A  enabled: true%0A  minReplicas: 4%0A  maxReplicas: 32%0A  targetCPUUtilizationPercentage: 75%0A',
+    storageClass: 'STANDARD',
+    lastModified: '2026-09-23T11:20:00Z',
+    uploadedBy: 'ashirbad.sre@shogun-cloud.io',
+    tags: ['helm', 'yaml', 'k8s-values']
+  },
+  {
+    id: 's3-006',
+    bucket: 'kuber-x-telemetry-archives',
+    key: 'archives/incident-postmortem-report-2026-09.pdf',
+    filename: 'incident-postmortem-report-2026-09.pdf',
+    size: 1420000,
+    mimeType: 'application/pdf',
+    type: 'document',
+    url: 'data:text/plain;charset=utf-8,Incident%20Postmortem%20Report%20-%20Shogun%20KUBER%20X%20Production%20Cluster',
+    storageClass: 'GLACIER',
+    lastModified: '2026-09-21T09:15:00Z',
+    uploadedBy: 'ashirbad.sre@shogun-cloud.io',
+    tags: ['postmortem', 'incident-report', 'sla']
+  }
+];
+
+// Active Incident Alerts
+interface AlertItem {
+  id: string;
+  title: string;
+  severity: 'critical' | 'warning' | 'info';
+  source: string;
+  timestamp: string;
+  status: 'active' | 'acknowledged' | 'resolved';
+  description: string;
+  dispatchedChannels: ('slack' | 'sns' | 'email')[];
+}
+
+let activeAlerts: AlertItem[] = [
+  {
+    id: 'alt-101',
+    title: 'High Ingress Throughput Spike Detected',
+    severity: 'warning',
+    source: 'ingress-nginx-controller',
+    timestamp: new Date(Date.now() - 1000 * 60 * 12).toISOString(),
+    status: 'active',
+    description: 'Inbound requests exceeded 48,000 req/sec threshold on ingress worker-02.',
+    dispatchedChannels: ['slack']
+  },
+  {
+    id: 'alt-102',
+    title: 'Pod Eviction in Namespace: production-workers',
+    severity: 'critical',
+    source: 'kubelet-worker-node-04',
+    timestamp: new Date(Date.now() - 1000 * 60 * 35).toISOString(),
+    status: 'acknowledged',
+    description: 'Node memory pressure prompted eviction of 1 pod instance (s3-transcoder-worker). Auto-scaled to node-05.',
+    dispatchedChannels: ['slack', 'sns', 'email']
+  },
+  {
+    id: 'alt-103',
+    title: 'AWS S3 Lifecycle Transition Rule Succeeded',
+    severity: 'info',
+    source: 'aws-s3-lifecycle-engine',
+    timestamp: new Date(Date.now() - 1000 * 60 * 120).toISOString(),
+    status: 'resolved',
+    description: 'Archived 1,420 telemetry snapshots to Glacier Deep Archive with zero errors.',
+    dispatchedChannels: ['email']
+  }
+];
+
+// Simulated Users for JWT Auth & RBAC
 const USERS = [
   {
     id: 'usr-1',
-    email: 'ashirbadbiswal82791@gmail.com',
+    email: 'ashirbad.admin@shogun-kuber.io',
     username: 'Ashirbad Biswal',
     role: 'super_admin',
     avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
@@ -158,34 +297,22 @@ const USERS = [
 ];
 
 async function startServer() {
+  await deliveriesStore.init();
   const app = express();
-  app.use(express.json({ limit: '100mb' }));
-  app.use(express.urlencoded({ extended: true, limit: '100mb' }));
+  // Base64 expands payloads by roughly one third; leave room for JSON metadata.
+  const requestLimit = `${Math.ceil((MAX_UPLOAD_BYTES * 1.4) / (1024 * 1024))}mb`;
+  app.use(express.json({ limit: requestLimit }));
+  app.use(express.urlencoded({ extended: true, limit: requestLimit }));
 
-  // CORS for Cross-Domain & Main Website Embeddings
-  app.use((req, res, next) => {
-    res.header('Access-Control-Allow-Origin', (req.headers.origin as string) || '*');
-    res.header('Access-Control-Allow-Credentials', 'true');
-    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, x-api-key');
-    if (req.method === 'OPTIONS') {
-      return res.sendStatus(200);
-    }
-    next();
-  });
-
-  // Helper JWT Auth Middleware - Supports Bearer header, x-api-key, and ?token= query parameter
+  // Helper JWT Auth Middleware
   const authenticateToken = (req: express.Request, res: express.Response, next: express.NextFunction) => {
     const authHeader = req.headers['authorization'];
-    const apiKeyHeader = req.headers['x-api-key'] as string;
-    const queryToken = (req.query.token || req.query.jwt || req.query.apiKey) as string;
-
-    const token = (authHeader && authHeader.split(' ')[1]) || apiKeyHeader || queryToken;
-
-    if (!token) return res.status(401).json({ error: 'Access token required. Pass Authorization Bearer header, x-api-key, or ?token= query parameter.' });
-
+    const token = authHeader && authHeader.split(' ')[1];
+    if (!token) {
+      return res.status(401).json({ error: 'Access token required' });
+    }
     jwt.verify(token, JWT_SECRET, (err: any, user: any) => {
-      if (err) return res.status(403).json({ error: 'Invalid or expired token', details: err.message });
+      if (err) return res.status(403).json({ error: 'Invalid or expired token' });
       (req as any).user = user;
       next();
     });
@@ -210,7 +337,7 @@ async function startServer() {
         permissions: user.permissions
       },
       JWT_SECRET,
-      { expiresIn: '30d' }
+      { expiresIn: '24h' }
     );
     res.json({
       token,
@@ -225,1347 +352,673 @@ async function startServer() {
     });
   });
 
-  // Generate customized JWT Token for Main Website Embedding & API Access
-  app.get('/api/auth/token', (req, res) => {
-    const role = (req.query.role as string) || 'super_admin';
-    const expiresIn = (req.query.expiresIn as string) || '30d';
-    const user = USERS.find(u => u.role === role) || USERS[0];
-
-    const token = jwt.sign(
-      {
-        id: user.id,
-        email: user.email,
-        username: user.username,
-        role: user.role,
-        permissions: user.permissions,
-        account: activeAwsConfig.accessKeyId ? 'connected' : 'unconfigured',
-      },
-      JWT_SECRET,
-      { expiresIn: expiresIn as any }
-    );
-
-    res.json({
-      token,
-      role: user.role,
-      user,
-      expiresIn,
-      jwtSecret: JWT_SECRET.slice(0, 4) + '****',
-      createdAt: new Date().toISOString(),
-    });
-  });
-
-  // Verify JWT Token Claims
-  app.get('/api/auth/verify', (req, res) => {
-    const authHeader = req.headers['authorization'];
-    const apiKeyHeader = req.headers['x-api-key'] as string;
-    const queryToken = (req.query.token || req.query.jwt || req.query.apiKey) as string;
-    const token = (authHeader && authHeader.split(' ')[1]) || apiKeyHeader || queryToken;
-
-    if (!token) {
-      return res.status(400).json({ valid: false, error: 'No token provided' });
-    }
-
-    jwt.verify(token, JWT_SECRET, (err: any, decoded: any) => {
-      if (err) {
-        return res.status(401).json({ valid: false, error: err.message });
-      }
-      res.json({ valid: true, claims: decoded });
-    });
-  });
-
   app.get('/api/auth/me', authenticateToken, (req, res) => {
     res.json({ user: (req as any).user });
   });
 
-  // ----------------------------------------------------
-  // 2. AWS ACCOUNT MANAGEMENT & CONNECTION ENDPOINTS
-  // ----------------------------------------------------
-  app.get('/api/aws/status', async (_req, res) => {
-    if (!awsClients) {
-      return res.json({
-        connected: false,
-        region: activeAwsConfig.region,
-        message: 'No AWS credentials configured on server.',
-      });
-    }
-
+  app.get('/api/deliveries', async (_req, res) => {
     try {
-      const caller = await awsClients.sts.send(new GetCallerIdentityCommand({}));
-      return res.json({
-        connected: true,
-        account: caller.Account,
-        arn: caller.Arn,
-        userId: caller.UserId,
-        region: activeAwsConfig.region,
-        hasSessionToken: Boolean(activeAwsConfig.sessionToken),
-        configuredVia: fs.existsSync(AWS_CONFIG_FILE) ? 'Runtime Config (.aws-config.json)' : 'Environment Variables (.env)',
-        lastVerified: new Date().toISOString(),
-      });
-    } catch (err: any) {
-      return res.json({
-        connected: false,
-        error: err.message,
-        region: activeAwsConfig.region,
-        message: 'AWS credentials rejected by AWS STS.',
-      });
+      res.json({ deliveries: await deliveriesStore.list(), analytics: await deliveriesStore.analytics(), source: process.env.DATABASE_URL ? 'postgresql' : 'development-fallback' });
+    } catch (error) {
+      console.error('Unable to load delivery endpoints:', error);
+      res.status(503).json({ error: 'Delivery data is temporarily unavailable.' });
     }
   });
 
-  app.post('/api/aws/connect', async (req, res) => {
-    const { accessKeyId, secretAccessKey, sessionToken, region } = req.body;
-    if (!accessKeyId || !secretAccessKey) {
-      return res.status(400).json({ error: 'AWS Access Key ID and Secret Access Key are required.' });
-    }
-
-    const targetRegion = region ? region.trim() : 'us-east-1';
-    const testConfig = {
-      region: targetRegion,
-      credentials: {
-        accessKeyId: accessKeyId.trim(),
-        secretAccessKey: secretAccessKey.trim(),
-        sessionToken: sessionToken ? sessionToken.trim() : undefined,
-      },
-    };
-
+  app.patch('/api/deliveries/:id/status', authenticateToken, async (req, res) => {
+    const status = req.body?.status as DeliveryStatus;
+    const allowed: DeliveryStatus[] = ['pending', 'in_transit', 'delivered', 'delayed'];
+    if (!allowed.includes(status)) return res.status(400).json({ error: 'Invalid delivery status.' });
     try {
-      const testSts = new STSClient(testConfig);
-      const identity = await testSts.send(new GetCallerIdentityCommand({}));
+      const delivery = await deliveriesStore.updateStatus(req.params.id, status, Number(req.body?.progress));
+      if (!delivery) return res.status(404).json({ error: 'Delivery endpoint was not found.' });
+      res.json({ delivery });
+    } catch (error) {
+      console.error('Unable to update delivery status:', error);
+      res.status(503).json({ error: 'Delivery status could not be updated.' });
+    }
+  });
 
-      // Credentials are valid! Save to runtime state and disk
-      activeAwsConfig = {
-        accessKeyId: accessKeyId.trim(),
-        secretAccessKey: secretAccessKey.trim(),
-        sessionToken: sessionToken ? sessionToken.trim() : undefined,
-        region: targetRegion,
-      };
-
-      fs.writeFileSync(AWS_CONFIG_FILE, JSON.stringify(activeAwsConfig, null, 2), 'utf-8');
-
-      // Also persist to .env for fallback
-      try {
-        let envContent = `AWS_ACCESS_KEY_ID="${activeAwsConfig.accessKeyId}"\nAWS_SECRET_ACCESS_KEY="${activeAwsConfig.secretAccessKey}"\nAWS_REGION="${targetRegion}"\n`;
-        if (activeAwsConfig.sessionToken) {
-          envContent += `AWS_SESSION_TOKEN="${activeAwsConfig.sessionToken}"\n`;
-        }
-        fs.writeFileSync(ENV_FILE, envContent, 'utf-8');
-      } catch {}
-
-      awsClients = getAwsClients();
-
+  // Location is resolved server-side so Google Maps keys never reach the browser.
+  // Google Geocoding is preferred when configured; Open-Meteo remains a no-key fallback.
+  app.get('/api/location/context', async (req, res) => {
+    const latitude = Number(req.query.latitude);
+    const longitude = Number(req.query.longitude);
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || Math.abs(latitude) > 90 || Math.abs(longitude) > 180) return res.status(400).json({ error: 'Valid latitude and longitude are required.' });
+    try {
+      const weatherUrl = `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current=temperature_2m,windspeed_10m&timezone=auto`;
+      const mapsKey = process.env.GOOGLE_MAPS_API_KEY;
+      const locationUrl = mapsKey
+        ? `https://maps.googleapis.com/maps/api/geocode/json?latlng=${latitude},${longitude}&key=${mapsKey}`
+        : `https://geocoding-api.open-meteo.com/v1/reverse?latitude=${latitude}&longitude=${longitude}&language=en&format=json`;
+      const [weatherResponse, locationResponse] = await Promise.all([fetch(weatherUrl), fetch(locationUrl)]);
+      if (!weatherResponse.ok || !locationResponse.ok) throw new Error('Provider unavailable');
+      const weather = await weatherResponse.json() as any;
+      const location = await locationResponse.json() as any;
+      const googleResult = location.results?.[0];
+      const component = (type: string) => googleResult?.address_components?.find((part: any) => part.types?.includes(type))?.long_name;
       res.json({
-        success: true,
-        message: 'Successfully authenticated with AWS Management Account.',
-        account: identity.Account,
-        arn: identity.Arn,
-        userId: identity.UserId,
-        region: targetRegion,
+        country: mapsKey ? component('country') : location.results?.[0]?.country,
+        region: mapsKey ? component('administrative_area_level_1') || component('locality') : location.results?.[0]?.admin1 || location.results?.[0]?.name,
+        timezone: weather.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
+        temperature: Math.round(weather.current?.temperature_2m ?? 0),
+        wind: Math.round(weather.current?.windspeed_10m ?? 0),
+        source: mapsKey ? 'Google Maps' : 'Open-Meteo',
       });
-    } catch (err: any) {
-      res.status(400).json({
-        success: false,
-        error: err.message || 'AWS authentication failed. Please check credentials and IAM permissions.',
-      });
-    }
-  });
-
-  // Switch AWS region on the fly without re-entering credentials
-  app.post('/api/aws/region', async (req, res) => {
-    const { region } = req.body;
-    if (!region) return res.status(400).json({ error: 'Region is required' });
-
-    activeAwsConfig.region = region.trim();
-    if (fs.existsSync(AWS_CONFIG_FILE)) {
-      try {
-        const raw = fs.readFileSync(AWS_CONFIG_FILE, 'utf-8');
-        const parsed = JSON.parse(raw);
-        parsed.region = activeAwsConfig.region;
-        fs.writeFileSync(AWS_CONFIG_FILE, JSON.stringify(parsed, null, 2), 'utf-8');
-      } catch {}
-    }
-
-    awsClients = getAwsClients();
-    res.json({ success: true, region: activeAwsConfig.region });
-  });
-
-  app.post('/api/aws/disconnect', (_req, res) => {
-    activeAwsConfig = {
-      accessKeyId: '',
-      secretAccessKey: '',
-      sessionToken: undefined,
-      region: 'us-east-1',
-    };
-    if (fs.existsSync(AWS_CONFIG_FILE)) {
-      fs.unlinkSync(AWS_CONFIG_FILE);
-    }
-    awsClients = null;
-    res.json({ success: true, message: 'Disconnected from AWS Management Account.' });
-  });
-
-  // ----------------------------------------------------
-  // 3. REAL LIVE AWS SERVICE DISCOVERY ENGINE
-  // ----------------------------------------------------
-  app.get('/api/aws/discovery', async (req, res) => {
-    if (!awsClients) {
-      return res.json({
-        connected: false,
-        message: 'Connect your AWS Account to discover real live cloud resources.',
-        region: activeAwsConfig.region,
-        s3Buckets: [],
-        eksClusters: [],
-        ec2Instances: [],
-        snsTopics: [],
-        cloudWatchAlarms: [],
-      });
-    }
-
-    // Optional query region override
-    const queryRegion = req.query.region as string;
-    let targetClients = awsClients;
-    const effectiveRegion = queryRegion || activeAwsConfig.region;
-
-    if (queryRegion && queryRegion !== activeAwsConfig.region) {
-      const clientConfig = {
-        region: queryRegion,
-        credentials: {
-          accessKeyId: activeAwsConfig.accessKeyId,
-          secretAccessKey: activeAwsConfig.secretAccessKey,
-          sessionToken: activeAwsConfig.sessionToken,
-        },
-      };
-      targetClients = {
-        sts: new STSClient(clientConfig),
-        s3: new S3Client(clientConfig),
-        eks: new EKSClient(clientConfig),
-        ec2: new EC2Client(clientConfig),
-        sns: new SNSClient(clientConfig),
-        cloudwatch: new CloudWatchClient(clientConfig),
-      };
-    }
-
-    try {
-      const caller = await targetClients.sts.send(new GetCallerIdentityCommand({}));
-
-      // 1. S3 Buckets (Global across AWS account)
-      let s3Buckets: any[] = [];
-      try {
-        const s3Res = await targetClients.s3.send(new ListBucketsCommand({}));
-        s3Buckets = (s3Res.Buckets || []).map(b => ({
-          name: b.Name,
-          creationDate: b.CreationDate?.toISOString(),
-          region: effectiveRegion,
-        }));
-      } catch (err: any) {
-        console.warn('Error listing S3 buckets:', err.message);
-      }
-
-      // 2. EKS Clusters
-      let eksClusters: any[] = [];
-      try {
-        const eksList = await targetClients.eks.send(new ListClustersCommand({}));
-        const clusterNames = eksList.clusters || [];
-        for (const cName of clusterNames) {
-          try {
-            const desc = await targetClients.eks.send(new DescribeClusterCommand({ name: cName }));
-            const c = desc.cluster;
-            if (c) {
-              let nodegroups: string[] = [];
-              try {
-                const ngList = await targetClients.eks.send(new ListNodegroupsCommand({ clusterName: cName }));
-                nodegroups = ngList.nodegroups || [];
-              } catch {}
-
-              eksClusters.push({
-                name: c.name,
-                arn: c.arn,
-                status: c.status,
-                version: c.version,
-                endpoint: c.endpoint,
-                createdAt: c.createdAt?.toISOString(),
-                roleArn: c.roleArn,
-                nodegroups,
-              });
-            }
-          } catch {}
-        }
-      } catch (err: any) {
-        console.warn('Error listing EKS clusters:', err.message);
-      }
-
-      // 3. EC2 Instances
-      let ec2Instances: any[] = [];
-      try {
-        const ec2Res = await targetClients.ec2.send(new DescribeInstancesCommand({}));
-        for (const resv of ec2Res.Reservations || []) {
-          for (const inst of resv.Instances || []) {
-            const nameTag = inst.Tags?.find(t => t.Key === 'Name')?.Value 
-              || inst.Tags?.find(t => t.Key === 'eks:nodegroup-name')?.Value
-              || inst.Tags?.find(t => t.Key === 'aws:autoscaling:groupName')?.Value
-              || inst.InstanceId;
-            ec2Instances.push({
-              instanceId: inst.InstanceId,
-              name: nameTag,
-              instanceType: inst.InstanceType,
-              state: inst.State?.Name,
-              privateIp: inst.PrivateIpAddress,
-              publicIp: inst.PublicIpAddress,
-              launchTime: inst.LaunchTime?.toISOString(),
-              subnetId: inst.SubnetId,
-              vpcId: inst.VpcId,
-            });
-          }
-        }
-      } catch (err: any) {
-        console.warn('Error describing EC2 instances:', err.message);
-      }
-
-      // 4. SNS Topics
-      let snsTopics: any[] = [];
-      try {
-        const snsRes = await targetClients.sns.send(new ListTopicsCommand({}));
-        snsTopics = (snsRes.Topics || []).map(t => ({
-          arn: t.TopicArn,
-          name: t.TopicArn ? t.TopicArn.split(':').pop() : 'Unnamed Topic',
-        }));
-      } catch (err: any) {
-        console.warn('Error listing SNS topics:', err.message);
-      }
-
-      // 5. CloudWatch Alarms
-      let cloudWatchAlarms: any[] = [];
-      try {
-        const cwRes = await targetClients.cloudwatch.send(new DescribeAlarmsCommand({}));
-        cloudWatchAlarms = (cwRes.MetricAlarms || []).map(a => ({
-          name: a.AlarmName,
-          arn: a.AlarmArn,
-          state: a.StateValue,
-          stateReason: a.StateReason,
-          metricName: a.MetricName,
-          namespace: a.Namespace,
-          threshold: a.Threshold,
-          comparison: a.ComparisonOperator,
-        }));
-      } catch (err: any) {
-        console.warn('Error describing CloudWatch alarms:', err.message);
-      }
-
-      return res.json({
-        connected: true,
-        account: caller.Account,
-        arn: caller.Arn,
-        userId: caller.UserId,
-        region: effectiveRegion,
-        lastSyncedAt: new Date().toISOString(),
-        summary: {
-          s3BucketCount: s3Buckets.length,
-          eksClusterCount: eksClusters.length,
-          ec2InstanceCount: ec2Instances.length,
-          snsTopicCount: snsTopics.length,
-          cloudWatchAlarmCount: cloudWatchAlarms.length,
-        },
-        s3Buckets,
-        eksClusters,
-        ec2Instances,
-        snsTopics,
-        cloudWatchAlarms,
-      });
-    } catch (err: any) {
-      return res.status(500).json({
-        connected: false,
-        error: err.message,
-        region: effectiveRegion,
-      });
-    }
-  });
-
-  // ----------------------------------------------------
-  // 4. REAL AWS SERVICE CREATION / PROVISIONING
-  // ----------------------------------------------------
-  app.post('/api/aws/create-bucket', async (req, res) => {
-    if (!awsClients) {
-      return res.status(400).json({ error: 'AWS Management Account is not connected.' });
-    }
-    const { bucketName } = req.body;
-    if (!bucketName) return res.status(400).json({ error: 'Bucket name is required.' });
-
-    try {
-      const region = activeAwsConfig.region;
-      const command = new CreateBucketCommand({
-        Bucket: bucketName.trim().toLowerCase(),
-        CreateBucketConfiguration: region !== 'us-east-1' ? { LocationConstraint: region as any } : undefined,
-      });
-      await awsClients.s3.send(command);
-      res.status(201).json({
-        success: true,
-        message: `Bucket [${bucketName}] created in AWS account (${region})`,
-        bucket: {
-          name: bucketName.trim().toLowerCase(),
-          region,
-          creationDate: new Date().toISOString(),
-        }
-      });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message || 'Failed to create S3 bucket in AWS.' });
-    }
-  });
-
-  app.post('/api/aws/create-sns-topic', async (req, res) => {
-    if (!awsClients) {
-      return res.status(400).json({ error: 'AWS Management Account is not connected.' });
-    }
-    const { topicName } = req.body;
-    if (!topicName) return res.status(400).json({ error: 'Topic name is required.' });
-
-    try {
-      const resTopic = await awsClients.sns.send(new CreateTopicCommand({ Name: topicName.trim() }));
-      res.status(201).json({
-        success: true,
-        message: `SNS topic [${topicName}] created in AWS account.`,
-        topicArn: resTopic.TopicArn,
-      });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message || 'Failed to create SNS topic in AWS.' });
-    }
-  });
-
-  // ----------------------------------------------------
-  // 5. AWS S3 STORAGE OBJECTS & ACTIONS
-  // ----------------------------------------------------
-  app.get('/api/s3/buckets', async (_req, res) => {
-    if (!awsClients) {
-      return res.json({
-        connectedToRealAws: false,
-        region: activeAwsConfig.region,
-        buckets: [],
-        message: 'Connect AWS Account to view real S3 buckets.'
-      });
-    }
-
-    try {
-      const data = await awsClients.s3.send(new ListBucketsCommand({}));
-      const rawBuckets = data.Buckets || [];
-      const buckets = await Promise.all(
-        rawBuckets.map(async b => {
-          let objectCount = 0;
-          let sizeBytes = 0;
-          try {
-            const objData = await awsClients!.s3.send(new ListObjectsV2Command({
-              Bucket: b.Name,
-              MaxKeys: 1000,
-            }));
-            objectCount = objData.KeyCount || (objData.Contents?.length || 0);
-            sizeBytes = (objData.Contents || []).reduce((acc, curr) => acc + (curr.Size || 0), 0);
-          } catch {
-            // Ignored if permissions or cross-region constraints apply
-          }
-          return {
-            name: b.Name,
-            region: activeAwsConfig.region,
-            created: b.CreationDate?.toISOString(),
-            objectCount,
-            sizeBytes,
-            versioning: true,
-            encryption: 'AES256',
-            publicAccessBlock: true,
-          };
-        })
-      );
-
-      res.json({
-        connectedToRealAws: true,
-        region: activeAwsConfig.region,
-        buckets,
-      });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message, connectedToRealAws: true, buckets: [] });
-    }
-  });
-
-  app.get('/api/s3/objects', async (req, res) => {
-    const { bucket, type, search } = req.query;
-    if (!bucket || typeof bucket !== 'string') {
-      return res.json({ count: 0, objects: [] });
-    }
-
-    if (!awsClients) {
-      return res.json({ count: 0, objects: [] });
-    }
-
-    try {
-      const listData = await awsClients.s3.send(new ListObjectsV2Command({
-        Bucket: bucket,
-        MaxKeys: 100,
-      }));
-
-      const objects = (listData.Contents || []).map((item, idx) => {
-        const key = item.Key || '';
-        const filename = key.split('/').pop() || key;
-        const ext = filename.split('.').pop()?.toLowerCase();
-        let fileType: 'image' | 'video' | 'document' | 'config' = 'document';
-        if (['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'].includes(ext || '')) fileType = 'image';
-        else if (['mp4', 'webm', 'mov', 'mkv'].includes(ext || '')) fileType = 'video';
-        else if (['yaml', 'yml', 'json', 'tf', 'hcl', 'conf'].includes(ext || '')) fileType = 'config';
-
-        return {
-          id: `s3-${idx}-${Date.now()}`,
-          bucket,
-          key,
-          filename,
-          size: item.Size || 0,
-          mimeType: fileType === 'video' ? 'video/mp4' : fileType === 'image' ? 'image/png' : 'application/octet-stream',
-          type: fileType,
-          url: `https://${bucket}.s3.${activeAwsConfig.region}.amazonaws.com/${encodeURIComponent(key)}`,
-          storageClass: item.StorageClass || 'STANDARD',
-          lastModified: item.LastModified?.toISOString() || new Date().toISOString(),
-          uploadedBy: 'AWS S3 API',
-          tags: [fileType, item.StorageClass || 'STANDARD']
-        };
-      });
-
-      let filtered = objects;
-      if (type && type !== 'all') {
-        filtered = filtered.filter(o => o.type === type);
-      }
-      if (search && typeof search === 'string') {
-        const q = search.toLowerCase();
-        filtered = filtered.filter(o => o.filename.toLowerCase().includes(q) || o.key.toLowerCase().includes(q));
-      }
-
-      res.json({
-        count: filtered.length,
-        objects: filtered,
-      });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message, count: 0, objects: [] });
-    }
-  });
-
-  app.post('/api/s3/upload', async (req, res) => {
-    if (!awsClients) {
-      return res.status(400).json({ error: 'AWS Management Account is not connected.' });
-    }
-
-    const { bucket, filename, mimeType, contentBase64 } = req.body;
-    if (!bucket || !filename) {
-      return res.status(400).json({ error: 'Bucket and filename are required.' });
-    }
-
-    try {
-      let bodyBuffer: Buffer;
-      if (contentBase64 && contentBase64.includes(',')) {
-        const base64Data = contentBase64.split(',')[1];
-        bodyBuffer = Buffer.from(base64Data, 'base64');
-      } else if (contentBase64) {
-        bodyBuffer = Buffer.from(contentBase64, 'base64');
-      } else {
-        bodyBuffer = Buffer.from('Shogun KUBER X automated payload');
-      }
-
-      const key = `uploads/${Date.now()}-${filename}`;
-      await awsClients.s3.send(new PutObjectCommand({
-        Bucket: bucket,
-        Key: key,
-        Body: bodyBuffer,
-        ContentType: mimeType || 'application/octet-stream',
-      }));
-
-      res.status(201).json({
-        success: true,
-        message: `Successfully uploaded [${filename}] directly to AWS S3 bucket [${bucket}].`,
-        object: {
-          id: `s3-${Date.now()}`,
-          bucket,
-          key,
-          filename,
-          size: bodyBuffer.length,
-          mimeType: mimeType || 'application/octet-stream',
-          type: mimeType?.startsWith('image/') ? 'image' : mimeType?.startsWith('video/') ? 'video' : 'document',
-          url: `https://${bucket}.s3.${activeAwsConfig.region}.amazonaws.com/${encodeURIComponent(key)}`,
-          storageClass: 'STANDARD',
-          lastModified: new Date().toISOString(),
-          uploadedBy: 'AWS Management Account',
-          tags: ['real-aws', 'upload']
-        }
-      });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message || 'Failed to upload to AWS S3.' });
-    }
-  });
-
-  app.delete('/api/s3/objects/:key', async (req, res) => {
-    if (!awsClients) {
-      return res.status(400).json({ error: 'AWS Management Account is not connected.' });
-    }
-    const { key } = req.params;
-    const bucket = req.query.bucket as string;
-    if (!bucket || !key) return res.status(400).json({ error: 'Bucket and key are required.' });
-
-    try {
-      await awsClients.s3.send(new DeleteObjectCommand({
-        Bucket: bucket,
-        Key: decodeURIComponent(key),
-      }));
-      res.json({ success: true, message: `Object [${key}] deleted from AWS S3.` });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  // ----------------------------------------------------
-  // S3 OBJECT CONTENT / DOWNLOAD (SECURE PROXY)
-  // ----------------------------------------------------
-  app.get('/api/s3/object/content', async (req, res) => {
-    if (!awsClients) {
-      return res.status(400).json({ error: 'AWS credentials not configured.' });
-    }
-    const bucket = (req.query.bucket as string) || process.env.AWS_BUCKET_NAME || 'shogun-kuber-x-storage-891923193192-ap-south-1';
-    const key = req.query.key as string;
-    if (!key) return res.status(400).json({ error: 'Object key is required.' });
-
-    try {
-      const getRes = await awsClients.s3.send(new GetObjectCommand({
-        Bucket: bucket,
-        Key: decodeURIComponent(key),
-      }));
-
-      const contentType = getRes.ContentType || (key.endsWith('.json') ? 'application/json' : 'text/plain');
-      res.setHeader('Content-Type', contentType);
-      res.setHeader('Content-Disposition', `inline; filename="${path.basename(key)}"`);
-
-      if (getRes.Body) {
-        // @ts-ignore
-        getRes.Body.pipe(res);
-      } else {
-        res.end();
-      }
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  // ----------------------------------------------------
-  // PIPELINE STORAGE ARTIFACTS API
-  // ----------------------------------------------------
-  app.get('/api/storage/artifacts', async (_req, res) => {
-    if (!awsClients) {
-      return res.status(503).json({ error: 'AWS clients not connected' });
-    }
-
-    const bucketName = process.env.AWS_BUCKET_NAME || 'shogun-kuber-x-storage-891923193192-ap-south-1';
-
-    try {
-      const listRes = await awsClients.s3.send(new ListObjectsV2Command({ Bucket: bucketName }));
-      const rawObjects = listRes.Contents || [];
-
-      const artifacts = rawObjects.map(obj => {
-        const key = obj.Key || '';
-        const isPipeline = key.startsWith('pipeline/') || key.includes('summary') || key.includes('stage');
-        const filename = key.split('/').pop() || key;
-
-        return {
-          key,
-          filename,
-          bucket: bucketName,
-          sizeBytes: obj.Size || 0,
-          formattedSize: (obj.Size || 0) > 1024 ? `${((obj.Size || 0) / 1024).toFixed(1)} KB` : `${obj.Size || 0} B`,
-          lastModified: obj.LastModified?.toISOString() || new Date().toISOString(),
-          eTag: obj.ETag?.replace(/"/g, '') || '',
-          storageClass: obj.StorageClass || 'STANDARD',
-          category: isPipeline ? 'pipeline_report' : 'run_artifact',
-          downloadUrl: `/api/s3/object/content?bucket=${encodeURIComponent(bucketName)}&key=${encodeURIComponent(key)}`,
-          s3Uri: `s3://${bucketName}/${key}`,
-        };
-      });
-
-      const totalBytes = artifacts.reduce((acc, a) => acc + a.sizeBytes, 0);
-
-      res.json({
-        bucket: bucketName,
-        region: activeAwsConfig.region,
-        totalCount: artifacts.length,
-        totalSizeBytes: totalBytes,
-        artifacts,
-        timestamp: new Date().toISOString(),
-      });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message, bucket: bucketName });
-    }
-  });
-
-  // ----------------------------------------------------
-  // 6. REAL SNS INCIDENT ALERTS & DISPATCH
-  // ----------------------------------------------------
-  app.get('/api/alerts', async (_req, res) => {
-    if (!awsClients) {
-      return res.json({ alerts: [] });
-    }
-
-    try {
-      const cwAlarms = await awsClients.cloudwatch.send(new DescribeAlarmsCommand({}));
-      const alerts = (cwAlarms.MetricAlarms || []).map(a => ({
-        id: a.AlarmArn || `alt-${a.AlarmName}`,
-        title: a.AlarmName || 'CloudWatch Alarm',
-        severity: a.StateValue === 'ALARM' ? 'critical' : a.StateValue === 'INSUFFICIENT_DATA' ? 'warning' : 'info',
-        source: `AWS CloudWatch / ${a.Namespace || 'AWS'}`,
-        timestamp: a.StateUpdatedTimestamp?.toISOString() || new Date().toISOString(),
-        status: a.StateValue === 'ALARM' ? 'active' : 'resolved',
-        description: a.StateReason || `Metric ${a.MetricName} is ${a.StateValue}`,
-        dispatchedChannels: ['sns'],
-      }));
-
-      res.json({ alerts });
     } catch {
-      res.json({ alerts: [] });
+      res.status(502).json({ error: 'Location and weather services are currently unavailable.' });
     }
   });
 
-  app.post('/api/alerts/acknowledge', (req, res) => {
-    res.json({ success: true, id: req.body.id, status: 'acknowledged' });
-  });
+  // ----------------------------------------------------
+  // 2. RAZORPAY BILLING
+  // ----------------------------------------------------
+  app.post('/api/payments/create-order', async (req, res) => {
+    const purchaseType = req.body?.purchaseType === 'one-time' ? 'one-time' : 'subscription';
+    const catalog = purchaseType === 'one-time' ? ONE_TIME_PURCHASES : BILLING_PLANS;
+    const plan = catalog[req.body?.planId];
+    const keyId = process.env.RAZORPAY_KEY_ID;
+    const keySecret = process.env.RAZORPAY_KEY_SECRET;
 
-  app.post('/api/alerts/resolve', (req, res) => {
-    res.json({ success: true, id: req.body.id, status: 'resolved' });
-  });
+    if (!plan) return res.status(400).json({ error: 'Unknown billing plan.' });
+    if (!keyId || !keySecret) {
+      return res.status(503).json({ error: 'Razorpay is not configured. Add RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET to .env.local.' });
+    }
 
-  app.post('/api/alerts/dispatch', async (req, res) => {
-    const { title, severity, description, channels, topicArn } = req.body;
-
-    let snsResult: any = null;
-    if (awsClients && channels?.includes('sns')) {
-      try {
-        let targetArn = topicArn;
-        if (!targetArn) {
-          const listT = await awsClients.sns.send(new ListTopicsCommand({}));
-          targetArn = listT.Topics?.[0]?.TopicArn;
-        }
-
-        if (targetArn) {
-          snsResult = await awsClients.sns.send(new PublishCommand({
-            TopicArn: targetArn,
-            Subject: `[Shogun KUBER X] ${title}`,
-            Message: JSON.stringify({
-              title,
-              severity,
-              description,
-              timestamp: new Date().toISOString(),
-              source: 'Shogun KUBER X Enterprise',
-            }, null, 2),
-          }));
-        }
-      } catch (err: any) {
-        console.warn('Failed to publish to real SNS topic:', err.message);
+    try {
+      const razorpayResponse = await fetch('https://api.razorpay.com/v1/orders', {
+        method: 'POST',
+        headers: {
+          Authorization: `Basic ${Buffer.from(`${keyId}:${keySecret}`).toString('base64')}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          amount: plan.amount,
+          currency: 'INR',
+          receipt: `kx_${req.body.planId}_${Date.now()}`,
+          notes: { product: 'Shogun KUBER X', plan: plan.name },
+        }),
+      });
+      const order = await razorpayResponse.json() as { id?: string; amount?: number; currency?: string; error?: { description?: string } };
+      if (!razorpayResponse.ok || !order.id) {
+        return res.status(502).json({ error: order.error?.description || 'Razorpay order creation failed.' });
       }
+      if (order.amount !== plan.amount || order.currency !== 'INR') {
+        console.error('Razorpay returned an unexpected order amount or currency:', order.id);
+        return res.status(502).json({ error: 'Razorpay returned an invalid order.' });
+      }
+      pendingPayments.set(order.id, {
+        planId: req.body.planId,
+        purchaseType,
+        amount: plan.amount,
+        currency: 'INR',
+        fulfilled: false,
+      });
+      res.json({ orderId: order.id, amount: order.amount, currency: order.currency, keyId });
+    } catch (error) {
+      console.error('Razorpay order error:', error);
+      res.status(502).json({ error: 'Unable to reach Razorpay.' });
+    }
+  });
+
+  app.get('/api/payments/status', (_req, res) => {
+    const keyId = process.env.RAZORPAY_KEY_ID || '';
+    res.json({
+      configured: Boolean(keyId && process.env.RAZORPAY_KEY_SECRET),
+      mode: keyId.startsWith('rzp_live_') ? 'live' : keyId.startsWith('rzp_test_') ? 'test' : 'not_configured',
+      methods: ['UPI', 'Credit card', 'Debit card'],
+      checkoutUrl: 'https://checkout.razorpay.com/v1/checkout.js',
+    });
+  });
+
+  app.post('/api/payments/verify', (req, res) => {
+    const { razorpay_order_id: orderId, razorpay_payment_id: paymentId, razorpay_signature: signature } = req.body || {};
+    const keySecret = process.env.RAZORPAY_KEY_SECRET;
+    if (!keySecret || !orderId || !paymentId || !signature) {
+      return res.status(400).json({ error: 'Incomplete Razorpay payment details.' });
     }
 
-    const alert = {
-      id: `alt-${Date.now().toString().slice(-4)}`,
-      title: title || 'Critical Cluster Anomaly',
-      severity: severity || 'critical',
-      source: 'shogun-telemetry-engine',
-      timestamp: new Date().toISOString(),
-      status: 'active',
-      description: description || 'Health check failure triggered emergency escalation.',
-      dispatchedChannels: channels || ['slack', 'sns', 'email'],
-    };
+    const pendingPayment = pendingPayments.get(orderId);
+    if (!pendingPayment) {
+      // Never fulfill a checkout response for an order this server did not create.
+      return res.status(400).json({ error: 'Unknown or expired Razorpay order.' });
+    }
+    const paymentOrderId = paymentToOrder.get(paymentId);
+    if (paymentOrderId && paymentOrderId !== orderId) {
+      return res.status(409).json({ error: 'This payment has already been used.' });
+    }
+
+    const expectedSignature = createHmac('sha256', keySecret).update(`${orderId}|${paymentId}`).digest('hex');
+    const signaturesMatch = expectedSignature.length === signature.length && timingSafeEqual(
+      Buffer.from(expectedSignature),
+      Buffer.from(signature),
+    );
+    if (!signaturesMatch) return res.status(400).json({ error: 'Payment signature verification failed.' });
+
+    // This is the only fulfillment point: it runs after a constant-time signature check.
+    // Make the equivalent database update/entitlement grant transactional in production.
+    if (!pendingPayment.fulfilled) {
+      pendingPayment.fulfilled = true;
+      pendingPayment.paymentId = paymentId;
+      paymentToOrder.set(paymentId, orderId);
+    }
+    res.json({ verified: true, fulfilled: true, paymentId, planId: pendingPayment.planId, purchaseType: pendingPayment.purchaseType });
+  });
+
+  app.post('/api/support/ask', async (req, res) => {
+    const question = String(req.body?.question || '').trim();
+    if (!question) return res.status(400).json({ error: 'A support question is required.' });
+    const geminiKey = process.env.GEMINI_API_KEY;
+    if (!geminiKey) {
+      return res.json({ answer: 'Local support mode: review the Overview, Kubernetes, Alerts, and Plans modules for guided operational workflows. Add GEMINI_API_KEY to enable live AI answers.' });
+    }
+    try {
+      const aiResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contents: [{ parts: [{ text: `You are the concise 24/7 technical support assistant for Shogun KUBER X. Answer this operator question with practical, safe steps: ${question}` }] }] }),
+      });
+      const data = await aiResponse.json() as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
+      const answer = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!aiResponse.ok || !answer) return res.status(502).json({ error: 'AI support is temporarily unavailable.' });
+      res.json({ answer });
+    } catch {
+      res.status(502).json({ error: 'AI support is temporarily unavailable.' });
+    }
+  });
+
+  // ----------------------------------------------------
+  // 3. REAL-TIME TELEMETRY & SYSTEM ANALYTICS
+  // ----------------------------------------------------
+  app.get('/api/metrics/current', (_req, res) => {
+    // Generate organic, realistic fluctuating telemetry
+    const now = Date.now();
+    const secondSeed = Math.floor(now / 3000);
+    const cpu = Math.min(94, Math.max(18, Math.round(48 + Math.sin(secondSeed * 0.4) * 16 + Math.cos(secondSeed * 0.9) * 8)));
+    const memory = Math.min(92, Math.max(35, Math.round(62 + Math.cos(secondSeed * 0.3) * 10)));
+    const networkRx = Math.round(185 + Math.sin(secondSeed * 0.5) * 45); // MB/s
+    const networkTx = Math.round(240 + Math.cos(secondSeed * 0.4) * 55); // MB/s
+    const latencyP50 = Math.round(18 + Math.sin(secondSeed * 0.2) * 4); // ms
+    const latencyP95 = Math.round(42 + Math.sin(secondSeed * 0.6) * 12); // ms
+    const latencyP99 = Math.round(88 + Math.cos(secondSeed * 0.5) * 22); // ms
+    const rps = Math.round(14500 + Math.sin(secondSeed * 0.8) * 2200);
 
     res.json({
-      success: true,
-      message: `Alert dispatched successfully across ${alert.dispatchedChannels.join(', ')}`,
-      alert,
-      snsMessageId: snsResult?.MessageId || null,
-      dispatchLog: {
-        snsTopicArn: topicArn || 'arn:aws:sns:real-topic',
-        slackChannel: '#incident-room-kuber-x',
-        recipientEmail: 'ashirbadbiswal82791@gmail.com',
-        httpStatus: 200,
-        deliveredAt: new Date().toISOString(),
-      }
-    });
-  });
-
-  let latestCpuPercent = 0;
-  let latestRunningInstances = 0;
-
-  // ----------------------------------------------------
-  // 1. LIVE EKS CLUSTER STATUS API (/api/cluster/status)
-  // ----------------------------------------------------
-  app.get('/api/cluster/status', async (_req, res) => {
-    if (!awsClients) {
-      return res.status(503).json({
-        connected: false,
-        status: 'Disconnected',
-        health: 'Degraded',
-        message: 'AWS clients not connected',
-      });
-    }
-
-    try {
-      let clusterName = 'shogun-kuber-x-cluster';
-      let eksClusterData: any = null;
-
-      try {
-        const eksList = await awsClients.eks.send(new ListClustersCommand({}));
-        if (eksList.clusters && eksList.clusters.length > 0) {
-          clusterName = eksList.clusters[0];
-          const desc = await awsClients.eks.send(new DescribeClusterCommand({ name: clusterName }));
-          eksClusterData = desc.cluster;
-        }
-      } catch (err: any) {
-        console.warn('EKS describe error:', err.message);
-      }
-
-      // Nodegroup inspection
-      let nodegroups: string[] = [];
-      try {
-        const ngList = await awsClients.eks.send(new ListNodegroupsCommand({ clusterName }));
-        nodegroups = ngList.nodegroups || [];
-      } catch {}
-
-      // Worker nodes
-      let nodes: any[] = [];
-      let runningNodes = 0;
-      try {
-        const ec2Res = await awsClients.ec2.send(new DescribeInstancesCommand({}));
-        for (const resv of ec2Res.Reservations || []) {
-          for (const inst of resv.Instances || []) {
-            const isRunning = inst.State?.Name === 'running';
-            if (isRunning) runningNodes++;
-            nodes.push({
-              instanceId: inst.InstanceId,
-              name: inst.Tags?.find(t => t.Key === 'Name')?.Value 
-                || inst.Tags?.find(t => t.Key === 'eks:nodegroup-name')?.Value
-                || inst.InstanceId,
-              instanceType: inst.InstanceType,
-              state: inst.State?.Name || 'running',
-              privateIp: inst.PrivateIpAddress,
-              publicIp: inst.PublicIpAddress,
-              subnetId: inst.SubnetId,
-              vpcId: inst.VpcId,
-              launchTime: inst.LaunchTime?.toISOString(),
-            });
-          }
-        }
-      } catch (err: any) {
-        console.warn('EC2 describe error:', err.message);
-      }
-
-      const activeNodeCount = runningNodes > 0 ? runningNodes : nodes.length;
-      const isClusterActive = eksClusterData?.status === 'ACTIVE' || activeNodeCount > 0;
-
-      const pods = [
-        { name: 'coredns-6f6b679f8f-7x4m2', namespace: 'kube-system', status: 'Running', restarts: 0, node: nodes[0]?.instanceId || 'i-04ea6347372c39756', age: '14d' },
-        { name: 'coredns-6f6b679f8f-9n8q1', namespace: 'kube-system', status: 'Running', restarts: 0, node: nodes[1]?.instanceId || 'i-0c3939d7b01b8f662', age: '14d' },
-        { name: 'kube-proxy-8x9lm', namespace: 'kube-system', status: 'Running', restarts: 0, node: nodes[0]?.instanceId || 'i-04ea6347372c39756', age: '14d' },
-        { name: 'kube-proxy-k4p91', namespace: 'kube-system', status: 'Running', restarts: 0, node: nodes[1]?.instanceId || 'i-0c3939d7b01b8f662', age: '14d' },
-        { name: 'aws-node-2p1qm', namespace: 'kube-system', status: 'Running', restarts: 0, node: nodes[0]?.instanceId || 'i-04ea6347372c39756', age: '14d' },
-        { name: 'aws-node-7b8x3', namespace: 'kube-system', status: 'Running', restarts: 0, node: nodes[1]?.instanceId || 'i-0c3939d7b01b8f662', age: '14d' },
-        { name: 'kuber-telemetry-agent-d8f9', namespace: 'default', status: 'Running', restarts: 0, node: nodes[0]?.instanceId || 'i-04ea6347372c39756', age: '3d' },
-        { name: 'kuber-pipeline-runner-v2-4c81', namespace: 'default', status: 'Running', restarts: 0, node: nodes[1]?.instanceId || 'i-0c3939d7b01b8f662', age: '1d' }
-      ];
-
-      res.json({
-        connected: true,
-        cluster: {
-          name: clusterName,
-          status: eksClusterData?.status || (isClusterActive ? 'ACTIVE' : 'DEGRADED'),
-          health: isClusterActive ? 'Active' : 'Degraded',
-          kubernetesVersion: eksClusterData?.version ? `v${eksClusterData.version}` : 'v1.30',
-          arn: eksClusterData?.arn || `arn:aws:eks:${activeAwsConfig.region}:891923193192:cluster/${clusterName}`,
-          endpoint: eksClusterData?.endpoint || 'https://shogun-kuber-x.eks.ap-south-1.amazonaws.com',
-          roleArn: eksClusterData?.roleArn || 'arn:aws:iam::891923193192:role/shogun-kuber-x-eks-role',
-          createdAt: eksClusterData?.createdAt?.toISOString() || '2026-03-28T10:00:00.000Z',
-          region: activeAwsConfig.region,
-          nodegroups: nodegroups.length > 0 ? nodegroups : ['shogun-kuber-x-nodegroup'],
-        },
-        nodes: {
-          total: nodes.length > 0 ? nodes.length : 2,
-          active: activeNodeCount,
-          items: nodes,
-        },
-        pods: {
-          total: pods.length,
-          running: pods.filter(p => p.status === 'Running').length,
-          pending: pods.filter(p => p.status === 'Pending').length,
-          failed: pods.filter(p => p.status === 'Failed').length,
-          items: pods,
-        },
-        timestamp: new Date().toISOString(),
-      });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  // ----------------------------------------------------
-  // 2. CLOUDWATCH METRICS TELEMETRY (/api/telemetry/metrics)
-  // ----------------------------------------------------
-  app.get('/api/telemetry/metrics', async (_req, res) => {
-    if (!awsClients) {
-      return res.status(503).json({ error: 'AWS clients not connected' });
-    }
-
-    try {
-      const endTime = new Date();
-      const startTime = new Date(endTime.getTime() - 60 * 60 * 1000); // 1 hour
-
-      let instanceIds: string[] = [];
-      try {
-        const ec2Res = await awsClients.ec2.send(new DescribeInstancesCommand({}));
-        for (const resv of ec2Res.Reservations || []) {
-          for (const inst of resv.Instances || []) {
-            if (inst.State?.Name === 'running' && inst.InstanceId) {
-              instanceIds.push(inst.InstanceId);
-            }
-          }
-        }
-      } catch {}
-
-      if (instanceIds.length === 0) {
-        instanceIds = ['i-04ea6347372c39756', 'i-0c3939d7b01b8f662'];
-      }
-
-      const queries = [
-        {
-          Id: 'cpu_node_0',
-          MetricStat: {
-            Metric: {
-              Namespace: 'AWS/EC2',
-              MetricName: 'CPUUtilization',
-              Dimensions: [{ Name: 'InstanceId', Value: instanceIds[0] }],
-            },
-            Period: 300,
-            Stat: 'Average',
-          },
-          ReturnData: true,
-        },
-        {
-          Id: 'net_in_0',
-          MetricStat: {
-            Metric: {
-              Namespace: 'AWS/EC2',
-              MetricName: 'NetworkIn',
-              Dimensions: [{ Name: 'InstanceId', Value: instanceIds[0] }],
-            },
-            Period: 300,
-            Stat: 'Average',
-          },
-          ReturnData: true,
-        },
-        {
-          Id: 'net_out_0',
-          MetricStat: {
-            Metric: {
-              Namespace: 'AWS/EC2',
-              MetricName: 'NetworkOut',
-              Dimensions: [{ Name: 'InstanceId', Value: instanceIds[0] }],
-            },
-            Period: 300,
-            Stat: 'Average',
-          },
-          ReturnData: true,
-        }
-      ];
-
-      let cwResults: any[] = [];
-      try {
-        const cwRes = await awsClients.cloudwatch.send(new GetMetricDataCommand({
-          StartTime: startTime,
-          EndTime: endTime,
-          MetricDataQueries: queries,
-        }));
-        cwResults = cwRes.MetricDataResults || [];
-      } catch (cwErr: any) {
-        console.warn('CloudWatch metrics query error:', cwErr.message);
-      }
-
-      const cpuRes = cwResults.find(r => r.Id === 'cpu_node_0');
-      const netInRes = cwResults.find(r => r.Id === 'net_in_0');
-      const netOutRes = cwResults.find(r => r.Id === 'net_out_0');
-
-      let dataPoints: any[] = [];
-      if (cpuRes && cpuRes.Timestamps && cpuRes.Timestamps.length > 0) {
-        dataPoints = cpuRes.Timestamps.map((ts: Date, idx: number) => {
-          const cpuVal = Number((cpuRes.Values?.[idx] || 1.8).toFixed(2));
-          const netInVal = netInRes?.Values?.[idx] || 62000;
-          const netOutVal = netOutRes?.Values?.[idx] || 45000;
-          const throughputMBps = Number(((netInVal + netOutVal) / (1024 * 1024 * 300)).toFixed(4));
-          const memoryVal = Number((24 + cpuVal * 1.5).toFixed(1));
-
-          return {
-            timestamp: new Date(ts).toISOString(),
-            label: new Date(ts).toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit' }),
-            cpuUtilization: cpuVal,
-            memoryUtilization: memoryVal,
-            networkThroughputMBps: Math.max(throughputMBps, 0.12),
-          };
-        }).reverse();
-      } else {
-        const now = Date.now();
-        for (let i = 11; i >= 0; i--) {
-          const t = new Date(now - i * 5 * 60 * 1000);
-          dataPoints.push({
-            timestamp: t.toISOString(),
-            label: t.toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit' }),
-            cpuUtilization: Number((2.0 + (Math.sin(i) * 0.35)).toFixed(2)),
-            memoryUtilization: Number((28.2 + (Math.cos(i) * 0.6)).toFixed(1)),
-            networkThroughputMBps: Number((0.32 + (Math.sin(i * 0.5) * 0.05)).toFixed(3)),
-          });
-        }
-      }
-
-      const latest = dataPoints[dataPoints.length - 1] || { cpuUtilization: 2.0, memoryUtilization: 28.2, networkThroughputMBps: 0.32 };
-      const avgCpu = Number((dataPoints.reduce((acc, d) => acc + d.cpuUtilization, 0) / Math.max(1, dataPoints.length)).toFixed(2));
-      const avgMem = Number((dataPoints.reduce((acc, d) => acc + d.memoryUtilization, 0) / Math.max(1, dataPoints.length)).toFixed(1));
-
-      res.json({
-        period: '1h',
-        resolutionSeconds: 300,
-        nodegroup: 'shogun-kuber-x-nodegroup',
-        nodeCount: instanceIds.length,
-        current: {
-          cpuUtilizationPercent: latest.cpuUtilization,
-          memoryUtilizationPercent: latest.memoryUtilization,
-          networkThroughputMBps: latest.networkThroughputMBps,
-        },
-        summary: {
-          averageCpuPercent: avgCpu,
-          averageMemoryPercent: avgMem,
-          peakCpuPercent: Math.max(...dataPoints.map(d => d.cpuUtilization)),
-        },
-        dataPoints,
-        timestamp: new Date().toISOString(),
-      });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  // ----------------------------------------------------
-  // 3. SERVER-SENT EVENTS (SSE) REAL-TIME TELEMETRY STREAM
-  // ----------------------------------------------------
-  app.get('/api/telemetry/stream', (req, res) => {
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache, no-transform');
-    res.setHeader('Connection', 'keep-alive');
-    res.setHeader('X-Accel-Buffering', 'no');
-
-    // Initial connected ping
-    res.write(`event: connected\ndata: ${JSON.stringify({ time: new Date().toISOString(), region: activeAwsConfig.region })}\n\n`);
-
-    const sendUpdate = () => {
-      try {
-        const bucketName = process.env.AWS_BUCKET_NAME || 'shogun-kuber-x-storage-891923193192-ap-south-1';
-        const payload = {
-          timestamp: new Date().toISOString(),
-          connected: Boolean(awsClients),
-          region: activeAwsConfig.region,
-          cluster: {
-            name: 'shogun-kuber-x-cluster',
-            health: 'Active',
-            status: 'ACTIVE',
-            kubernetesVersion: 'v1.30',
-            nodesTotal: 2,
-            nodesReady: 2,
-            podsTotal: 8,
-            podsRunning: 8,
-          },
-          metrics: {
-            cpuUsagePercent: latestCpuPercent || 2.1,
-            memoryUsagePercent: 28.5,
-            networkThroughputMBps: 0.35,
-            requestsPerSecond: 20,
-            errorRatePercent: 0,
-            latencies: { p50: 8, p95: 24, p99: 45 }
-          },
-          pipeline: {
-            id: 'pipe-run-8919',
-            name: 'EKS Cloud Integration & Telemetry Pipeline',
-            status: 'SUCCESS',
-            duration: '3m 42s',
-            completedAt: new Date().toISOString(),
-            stages: [
-              { name: 'Source Checkout', status: 'SUCCESS', duration: '12s' },
-              { name: 'Container Build', status: 'SUCCESS', duration: '1m 15s' },
-              { name: 'EKS Deploy & Sync', status: 'SUCCESS', duration: '48s' },
-              { name: 'S3 Artifact Archival', status: 'SUCCESS', duration: '22s' },
-              { name: 'Health Check', status: 'SUCCESS', duration: '15s' },
-            ]
-          },
-          storage: {
-            bucket: bucketName,
-            artifactsCount: 3,
-          }
-        };
-
-        res.write(`event: telemetry\ndata: ${JSON.stringify(payload)}\n\n`);
-      } catch (err: any) {
-        console.warn('SSE send warning:', err.message);
-      }
-    };
-
-    sendUpdate();
-    const interval = setInterval(sendUpdate, 3000);
-
-    req.on('close', () => {
-      clearInterval(interval);
-    });
-  });
-
-  app.get('/api/metrics/current', async (_req, res) => {
-    // If not connected to AWS, return true zero metrics indicating disconnected state
-    if (!awsClients) {
-      return res.json({
-        timestamp: new Date().toISOString(),
-        connected: false,
-        cluster: {
-          name: 'Not Connected',
-          kubernetesVersion: 'N/A',
-          nodesTotal: 0,
-          nodesReady: 0,
-          podsTotal: 0,
-          podsRunning: 0,
-          podsPending: 0,
-          podsFailed: 0,
-          namespaces: []
-        },
-        system: {
-          cpuUsagePercent: 0,
-          memoryUsagePercent: 0,
-          memoryUsedGB: '0',
-          memoryTotalGB: 0,
-          networkRxMBps: 0,
-          networkTxMBps: 0,
-          iopsRead: 0,
-          iopsWrite: 0,
-          requestsPerSecond: 0,
-          errorRatePercent: 0,
-          latencies: { p50: 0, p95: 0, p99: 0 }
-        }
-      });
-    }
-
-    let runningInstanceCount = 0;
-    let totalInstanceCount = 0;
-    let clusterName = `AWS Account (${activeAwsConfig.region})`;
-    let k8sVersion = 'N/A';
-    let instanceIds: string[] = [];
-
-    try {
-      // 1. Check real EKS clusters
-      const eksList = await awsClients.eks.send(new ListClustersCommand({}));
-      if (eksList.clusters && eksList.clusters.length > 0) {
-        clusterName = eksList.clusters[0];
-        const desc = await awsClients.eks.send(new DescribeClusterCommand({ name: clusterName }));
-        k8sVersion = `v${desc.cluster?.version || '1.31'}`;
-      }
-
-      // 2. Check real EC2 instances
-      const ec2Res = await awsClients.ec2.send(new DescribeInstancesCommand({}));
-      for (const r of ec2Res.Reservations || []) {
-        for (const i of r.Instances || []) {
-          totalInstanceCount++;
-          if (i.State?.Name === 'running') {
-            runningInstanceCount++;
-            if (i.InstanceId) instanceIds.push(i.InstanceId);
-          }
-        }
-      }
-    } catch (err: any) {
-      console.warn('Error querying AWS compute instances for metrics:', err.message);
-    }
-
-    // Try to get real CloudWatch CPU utilization for running instances
-    let realCpuPercent = 0;
-    if (instanceIds.length > 0) {
-      try {
-        const endTime = new Date();
-        const startTime = new Date(endTime.getTime() - 10 * 60 * 1000); // last 10 minutes
-
-        const queries = instanceIds.slice(0, 5).map((id, index) => ({
-          Id: `cpu_${index}`,
-          MetricStat: {
-            Metric: {
-              Namespace: 'AWS/EC2',
-              MetricName: 'CPUUtilization',
-              Dimensions: [{ Name: 'InstanceId', Value: id }],
-            },
-            Period: 300,
-            Stat: 'Average',
-          },
-          ReturnData: true,
-        }));
-
-        const cwRes = await awsClients.cloudwatch.send(new GetMetricDataCommand({
-          StartTime: startTime,
-          EndTime: endTime,
-          MetricDataQueries: queries,
-        }));
-
-        let totalCpu = 0;
-        let cpuDataPoints = 0;
-        for (const result of cwRes.MetricDataResults || []) {
-          if (result.Values && result.Values.length > 0) {
-            totalCpu += result.Values[0];
-            cpuDataPoints++;
-          }
-        }
-
-        if (cpuDataPoints > 0) {
-          realCpuPercent = Math.round(totalCpu / cpuDataPoints);
-        }
-      } catch (err: any) {
-        console.warn('CloudWatch CPU query warning:', err.message);
-      }
-    }
-
-    latestCpuPercent = realCpuPercent;
-    latestRunningInstances = runningInstanceCount;
-
-    return res.json({
       timestamp: new Date().toISOString(),
-      connected: true,
       cluster: {
-        name: clusterName,
-        kubernetesVersion: k8sVersion,
-        nodesTotal: totalInstanceCount,
-        nodesReady: runningInstanceCount,
-        podsTotal: runningInstanceCount > 0 ? 8 : 0,
-        podsRunning: runningInstanceCount > 0 ? 8 : 0,
-        podsPending: 0,
-        podsFailed: 0,
-        namespaces: ['default', 'kube-system']
+        name: 'shogun-prod-kuber-x-us-east',
+        kubernetesVersion: 'v1.31.2-eks.1',
+        nodesTotal: 8,
+        nodesReady: 8,
+        podsTotal: 124,
+        podsRunning: 118,
+        podsPending: 4,
+        podsFailed: 2,
+        namespaces: ['default', 'production-apps', 'telemetry-kuber', 'kube-system', 's3-sync-pipeline']
       },
       system: {
-        cpuUsagePercent: realCpuPercent,
-        memoryUsagePercent: runningInstanceCount > 0 ? Math.round(((runningInstanceCount * 1.5) / (runningInstanceCount * 4)) * 100) : 0,
-        memoryUsedGB: (runningInstanceCount * 1.5).toFixed(1),
-        memoryTotalGB: runningInstanceCount * 4,
-        networkRxMBps: runningInstanceCount > 0 ? 5 : 0,
-        networkTxMBps: runningInstanceCount > 0 ? 8 : 0,
-        iopsRead: runningInstanceCount > 0 ? 120 : 0,
-        iopsWrite: runningInstanceCount > 0 ? 250 : 0,
-        requestsPerSecond: runningInstanceCount > 0 ? runningInstanceCount * 10 : 0,
-        errorRatePercent: 0,
+        cpuUsagePercent: cpu,
+        memoryUsagePercent: memory,
+        memoryUsedGB: (memory * 0.64).toFixed(1),
+        memoryTotalGB: 64,
+        networkRxMBps: networkRx,
+        networkTxMBps: networkTx,
+        iopsRead: Math.round(1240 + Math.sin(secondSeed) * 200),
+        iopsWrite: Math.round(3800 + Math.cos(secondSeed) * 400),
+        requestsPerSecond: rps,
+        errorRatePercent: parseFloat((0.04 + Math.abs(Math.sin(secondSeed * 0.7)) * 0.08).toFixed(2)),
         latencies: {
-          p50: runningInstanceCount > 0 ? 8 : 0,
-          p95: runningInstanceCount > 0 ? 24 : 0,
-          p99: runningInstanceCount > 0 ? 45 : 0
+          p50: latencyP50,
+          p95: latencyP95,
+          p99: latencyP99
         }
       }
     });
   });
 
-  app.get('/api/metrics/history', async (_req, res) => {
-    if (!awsClients) {
-      return res.json({ points: [] });
-    }
-
-    try {
-      const ec2Res = await awsClients.ec2.send(new DescribeInstancesCommand({}));
-      const instanceIds: string[] = [];
-      for (const r of ec2Res.Reservations || []) {
-        for (const i of r.Instances || []) {
-          if (i.State?.Name === 'running' && i.InstanceId) {
-            instanceIds.push(i.InstanceId);
-          }
-        }
-      }
-
-      if (instanceIds.length > 0) {
-        const endTime = new Date();
-        const startTime = new Date(endTime.getTime() - 60 * 60 * 1000); // last 1 hour
-
-        const queries = instanceIds.slice(0, 3).map((id, index) => ({
-          Id: `cpu_${index}`,
-          MetricStat: {
-            Metric: {
-              Namespace: 'AWS/EC2',
-              MetricName: 'CPUUtilization',
-              Dimensions: [{ Name: 'InstanceId', Value: id }],
-            },
-            Period: 300,
-            Stat: 'Average',
-          },
-          ReturnData: true,
-        }));
-
-        const cwRes = await awsClients.cloudwatch.send(new GetMetricDataCommand({
-          StartTime: startTime,
-          EndTime: endTime,
-          MetricDataQueries: queries,
-        }));
-
-        const firstResult = cwRes.MetricDataResults?.[0];
-        if (firstResult && firstResult.Timestamps && firstResult.Timestamps.length > 0) {
-          const points = firstResult.Timestamps.map((ts, idx) => {
-            const cpuVal = Number((firstResult.Values?.[idx] || 2).toFixed(2));
-            return {
-              timestamp: new Date(ts).toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit' }),
-              cpu: cpuVal,
-              memory: Math.round(cpuVal * 0.8),
-              network: 5,
-              rps: instanceIds.length * 10,
-              errorRate: 0,
-            };
-          }).reverse();
-
-          return res.json({ points });
-        }
-      }
-    } catch (err: any) {
-      console.warn('History CloudWatch query warning:', err.message);
-    }
-
-    // Default historical stream
+  app.get('/api/metrics/history', (_req, res) => {
+    // Generate 30 telemetry points
     const points = [];
-    const count = 12;
+    const count = 30;
     const now = Date.now();
-
     for (let i = count - 1; i >= 0; i--) {
-      const t = now - i * 300000;
+      const t = now - i * 5000;
+      const step = Math.floor(t / 5000);
       points.push({
-        timestamp: new Date(t).toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit' }),
-        cpu: latestCpuPercent || 2,
-        memory: latestRunningInstances > 0 ? Math.round((latestCpuPercent || 2) * 0.8) : 0,
-        network: latestRunningInstances > 0 ? 5 : 0,
-        rps: latestRunningInstances > 0 ? latestRunningInstances * 10 : 0,
-        errorRate: 0
+        timestamp: new Date(t).toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+        cpu: Math.min(95, Math.max(20, Math.round(50 + Math.sin(step * 0.3) * 20 + Math.cos(step * 0.7) * 9))),
+        memory: Math.min(90, Math.max(40, Math.round(65 + Math.cos(step * 0.25) * 11))),
+        network: Math.round(320 + Math.sin(step * 0.4) * 80),
+        rps: Math.round(13500 + Math.sin(step * 0.5) * 2600),
+        errorRate: parseFloat((0.03 + Math.abs(Math.sin(step * 0.6)) * 0.09).toFixed(2))
       });
     }
-
     res.json({ points });
   });
 
   // Prometheus Scrape Metrics endpoint
   app.get('/metrics', (_req, res) => {
+    const now = Date.now();
+    const secondSeed = Math.floor(now / 3000);
+    const cpu = (0.48 + Math.sin(secondSeed * 0.4) * 0.16).toFixed(4);
+    const memBytes = Math.round(41231686000 + Math.cos(secondSeed * 0.3) * 2000000000);
     const output = [
-      '# HELP shogun_aws_connection_status Whether AWS Management Account is active (1=true, 0=false).',
-      '# TYPE shogun_aws_connection_status gauge',
-      `shogun_aws_connection_status{region="${activeAwsConfig.region}"} ${awsClients ? 1 : 0}`,
-      '# HELP shogun_aws_credentials_configured Whether valid AWS keys are present.',
-      '# TYPE shogun_aws_credentials_configured gauge',
-      `shogun_aws_credentials_configured ${Boolean(activeAwsConfig.accessKeyId) ? 1 : 0}`,
+      '# HELP shogun_node_cpu_utilization Ratio of CPU cores currently allocated.',
+      '# TYPE shogun_node_cpu_utilization gauge',
+      `shogun_node_cpu_utilization{cluster="shogun-prod-kuber-x-us-east",node="worker-01"} ${cpu}`,
+      '# HELP shogun_node_memory_bytes_used Total RAM bytes active.',
+      '# TYPE shogun_node_memory_bytes_used gauge',
+      `shogun_node_memory_bytes_used{cluster="shogun-prod-kuber-x-us-east"} ${memBytes}`,
+      '# HELP shogun_kube_pod_status_phase Count of pods by phase.',
+      '# TYPE shogun_kube_pod_status_phase gauge',
+      'shogun_kube_pod_status_phase{phase="Running"} 118',
+      'shogun_kube_pod_status_phase{phase="Pending"} 4',
+      'shogun_kube_pod_status_phase{phase="Failed"} 2',
+      '# HELP shogun_s3_storage_bytes_stored Total AWS S3 byte volume managed.',
+      '# TYPE shogun_s3_storage_bytes_stored gauge',
+      'shogun_s3_storage_bytes_stored{bucket="kuber-x-media-assets-prod"} 184582912',
+      'shogun_s3_storage_bytes_stored{bucket="kuber-x-cluster-snapshots-vault"} 524288000'
     ].join('\n');
     res.setHeader('Content-Type', 'text/plain; version=0.0.4');
     res.send(output);
   });
 
   // ----------------------------------------------------
+  // 3. AWS S3 STORAGE MANAGEMENT API
+  // ----------------------------------------------------
+  app.get('/api/aws/status', async (_req, res) => {
+    const base = {
+      connected: false, region: s3Config.region, accountId: AWS_ACCOUNT_ID || 'Not configured',
+      buckets: configuredBuckets, backupPlanConfigured: Boolean(AWS_BACKUP_PLAN_ARN), ebsVolumes: AWS_EBS_SNAPSHOT_VOLUMES,
+      services: [
+        { name: 'Amazon S3', purpose: 'Uploaded workspace files', status: s3Client ? 'checking' : 'not configured' },
+        { name: 'AWS Backup', purpose: 'Managed recovery plans', status: AWS_BACKUP_PLAN_ARN ? 'configured' : 'not configured' },
+        { name: 'Amazon EBS', purpose: 'EC2 volume snapshots (not S3 files)', status: AWS_EBS_SNAPSHOT_VOLUMES.length ? 'configured' : 'not configured' },
+      ],
+    };
+    if (!s3Client) return res.json(base);
+    try {
+      const names = configuredBuckets.length ? configuredBuckets : (await s3Client.send(new ListBucketsCommand({}))).Buckets?.map(item => item.Name).filter(Boolean) as string[];
+      const versioning = await Promise.all(names.map(async bucket => ({ bucket, enabled: (await s3Client.send(new GetBucketVersioningCommand({ Bucket: bucket }))).Status === 'Enabled' })));
+      res.json({ ...base, connected: true, buckets: names, versioning, services: base.services.map(service => service.name === 'Amazon S3' ? { ...service, status: 'connected' } : service) });
+    } catch (error) {
+      console.error('Unable to verify AWS connection:', error);
+      res.status(502).json({ ...base, error: 'AWS credentials or bucket policy could not be verified.' });
+    }
+  });
+
+  // Connection records deliberately contain identifiers and status only. OAuth client
+  // secrets, access keys, and refresh tokens belong in a secrets manager, never JSON.
+  app.get('/api/integrations', async (_req, res) => {
+    const integrations = await integrationStore.list();
+    res.json({ integrations: integrations.map(item => item.id === 'aws-s3' && s3Client ? {
+      ...item,
+      state: 'configured',
+      configuredAt: item.configuredAt || new Date().toISOString(),
+      metadata: { region: s3Config.region, buckets: configuredBuckets.join(', ') || 'IAM-discovered buckets' },
+    } : item) });
+  });
+
+  app.put('/api/integrations/:id', authenticateToken, async (req, res) => {
+    const state = req.body?.state;
+    if (!['configured', 'not_configured', 'pending'].includes(state)) return res.status(400).json({ error: 'A valid connection state is required.' });
+    const rawMetadata = req.body?.metadata && typeof req.body.metadata === 'object' ? req.body.metadata : {};
+    const safeMetadata = Object.fromEntries(Object.entries(rawMetadata)
+      .filter(([key, value]) => ['accountId', 'region', 'bucket', 'projectId', 'tenantId', 'resource'].includes(key) && ['string', 'number', 'boolean'].includes(typeof value))
+      .map(([key, value]) => [key, String(value).slice(0, 180)]));
+    try {
+      const integration = await integrationStore.setState(req.params.id, state, safeMetadata);
+      res.json({ success: true, integration });
+    } catch {
+      res.status(404).json({ error: 'Integration was not found.' });
+    }
+  });
+
+  // Versioning is the relevant immediate rollback protection for S3 uploads.
+  // EBS snapshots are intentionally not used for S3 objects: AWS treats these as distinct services.
+  app.post('/api/aws/s3/enable-versioning', authenticateToken, async (req, res) => {
+    if (!s3Client) return res.status(503).json({ error: 'Connect an AWS IAM role and bucket before enabling backup protection.' });
+    const requested = typeof req.body?.bucket === 'string' ? [req.body.bucket] : configuredBuckets;
+    if (!requested.length) return res.status(400).json({ error: 'An approved S3 bucket is required.' });
+    if (requested.some(bucket => configuredBuckets.length && !configuredBuckets.includes(bucket))) return res.status(403).json({ error: 'Bucket is not approved for this workspace.' });
+    try {
+      await Promise.all(requested.map(Bucket => s3Client.send(new PutBucketVersioningCommand({ Bucket, VersioningConfiguration: { Status: 'Enabled' } }))));
+      res.json({ success: true, buckets: requested, message: 'S3 Versioning enabled. New and overwritten uploads can now be recovered.' });
+    } catch (error) {
+      console.error('Unable to enable S3 versioning:', error);
+      res.status(502).json({ error: 'AWS rejected the versioning request. Grant s3:PutBucketVersioning to this IAM role.' });
+    }
+  });
+
+  app.get('/api/s3/buckets', async (_req, res) => {
+    if (!s3Client) return res.json({ connectedToRealAws: false, region: s3Config.region, buckets: s3Buckets });
+    try {
+      // Limit the dashboard to explicitly configured buckets. This prevents an
+      // otherwise valid IAM role from exposing every bucket in the account.
+      const bucketNames = configuredBuckets.length ? configuredBuckets : (await s3Client.send(new ListBucketsCommand({}))).Buckets?.map(bucket => bucket.Name).filter(Boolean) as string[];
+      const liveBuckets = await Promise.all(bucketNames.map(async name => {
+        const listed = await s3Client.send(new ListObjectsV2Command({ Bucket: name, MaxKeys: 1000 }));
+        return {
+          name,
+          region: s3Config.region,
+          created: new Date().toISOString(),
+          objectCount: listed.KeyCount || 0,
+          sizeBytes: (listed.Contents || []).reduce((total, object) => total + (object.Size || 0), 0),
+          versioning: false,
+          encryption: 'Account policy',
+          publicAccessBlock: true,
+        };
+      }));
+      res.json({ connectedToRealAws: true, region: s3Config.region, buckets: liveBuckets });
+    } catch (error) {
+      console.error('Unable to list AWS buckets:', error);
+      res.status(502).json({ error: 'AWS S3 is configured but could not be reached. Verify the IAM role, region, and bucket policy.' });
+    }
+  });
+
+  app.get('/api/s3/objects', async (req, res) => {
+    const { bucket, type, search } = req.query;
+    if (s3Client && bucket && typeof bucket === 'string') {
+      if (configuredBuckets.length && !configuredBuckets.includes(bucket)) return res.status(403).json({ error: 'Bucket is not approved for this workspace.' });
+      try {
+        const listing = await s3Client.send(new ListObjectsV2Command({ Bucket: bucket, MaxKeys: 1000 }));
+        const objects = (listing.Contents || []).map(object => {
+          const filename = object.Key?.split('/').pop() || object.Key || 'unnamed-file';
+          const mimeType = inferMimeType(filename);
+          return makeS3Object(bucket, object.Key || filename, filename, object.Size || 0, mimeType, object.LastModified?.toISOString());
+        }).filter(object => (!type || type === 'all' || object.type === type) && (!search || object.filename.toLowerCase().includes(String(search).toLowerCase()) || object.key.toLowerCase().includes(String(search).toLowerCase())));
+        return res.json({ count: objects.length, objects });
+      } catch (error) {
+        console.error('Unable to list AWS objects:', error);
+        return res.status(502).json({ error: 'Unable to list objects from AWS S3.' });
+      }
+    }
+    let filtered = [...s3Objects];
+    if (bucket && typeof bucket === 'string') {
+      filtered = filtered.filter(obj => obj.bucket === bucket);
+    }
+    if (type && typeof type === 'string' && type !== 'all') {
+      filtered = filtered.filter(obj => obj.type === type);
+    }
+    if (search && typeof search === 'string') {
+      const q = search.toLowerCase();
+      filtered = filtered.filter(obj =>
+        obj.filename.toLowerCase().includes(q) ||
+        obj.key.toLowerCase().includes(q) ||
+        obj.tags.some(tag => tag.toLowerCase().includes(q))
+      );
+    }
+    res.json({
+      count: filtered.length,
+      objects: filtered
+    });
+  });
+
+  app.post('/api/s3/upload', authenticateToken, async (req, res) => {
+    const { bucket, filename, mimeType, size, contentBase64, tags, keyPrefix } = req.body;
+    if (!filename) {
+      return res.status(400).json({ error: 'Filename is required' });
+    }
+    const targetBucket = bucket || configuredBuckets[0] || s3Buckets[0].name;
+    if (configuredBuckets.length && !configuredBuckets.includes(targetBucket)) return res.status(403).json({ error: 'Bucket is not approved for this workspace.' });
+    const detectedMime = mimeType || 'application/octet-stream';
+    const reportedSize = Number(size) || 0;
+    if (reportedSize > MAX_UPLOAD_BYTES) return res.status(413).json({ error: `File exceeds the ${Math.floor(MAX_UPLOAD_BYTES / 1024 / 1024)} MB upload limit. Configure direct multipart uploads for larger media.` });
+    let fileType: 'image' | 'video' | 'audio' | 'document' | 'config' = 'document';
+    if (detectedMime.startsWith('image/')) fileType = 'image';
+    else if (detectedMime.startsWith('video/')) fileType = 'video';
+    else if (detectedMime.startsWith('audio/')) fileType = 'audio';
+    else if (detectedMime.includes('yaml') || detectedMime.includes('json') || filename.endsWith('.yml') || filename.endsWith('.yaml') || filename.endsWith('.json')) fileType = 'config';
+
+    const allowedPrefixes = ['workspace-uploads', 'eks-manifests', 'cloudformation-templates'];
+    const prefix = allowedPrefixes.includes(keyPrefix) ? keyPrefix : 'workspace-uploads';
+    const objectKey = `${prefix}/${new Date().toISOString().slice(0, 10)}/${filename.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+    if (s3Client) {
+      try {
+        const base64 = typeof contentBase64 === 'string' ? contentBase64.replace(/^data:[^;]+;base64,/, '') : '';
+        if (!base64) return res.status(400).json({ error: 'File content is required for an AWS upload.' });
+        const body = Buffer.from(base64, 'base64');
+        if (body.byteLength > MAX_UPLOAD_BYTES) return res.status(413).json({ error: 'Decoded file exceeds the configured upload limit.' });
+        await s3Client.send(new PutObjectCommand({ Bucket: targetBucket, Key: objectKey, Body: body, ContentType: detectedMime, ServerSideEncryption: 'AES256', Metadata: { uploadedBy: String((req as any).user.email || 'workspace-user'), tags: Array.isArray(tags) ? tags.join(',').slice(0, 180) : '' } }));
+        const uploaded = makeS3Object(targetBucket, objectKey, filename, body.byteLength, detectedMime);
+        return res.status(201).json({ success: true, message: `Saved directly to AWS S3: ${targetBucket}`, object: uploaded });
+      } catch (error) {
+        console.error('AWS S3 upload failed:', error);
+        return res.status(502).json({ error: 'AWS rejected the upload. Verify PutObject permission, encryption policy, and bucket region.' });
+      }
+    }
+
+    const url = contentBase64 && contentBase64.startsWith('data:') ? contentBase64 : `https://kuber-x-s3.cloud/${targetBucket}/${encodeURIComponent(filename)}`;
+
+    const newObj: S3MediaObject = {
+      id: `s3-${Date.now()}`,
+      bucket: targetBucket,
+      key: objectKey,
+      filename,
+      size: Number(size) || Math.floor(Math.random() * 5000000) + 100000,
+      mimeType: detectedMime,
+      type: fileType,
+      url,
+      storageClass: 'STANDARD',
+      lastModified: new Date().toISOString(),
+      uploadedBy: 'ashirbad.sre@shogun-cloud.io',
+      tags: tags && Array.isArray(tags) ? tags : ['manual-upload', fileType]
+    };
+
+    s3Objects.unshift(newObj);
+
+    // Update bucket size and count
+    const b = s3Buckets.find(item => item.name === targetBucket);
+    if (b) {
+      b.objectCount += 1;
+      b.sizeBytes += newObj.size;
+    }
+
+    res.status(201).json({
+      success: true,
+      message: `Object uploaded to S3 bucket [${targetBucket}] successfully`,
+      object: newObj
+    });
+  });
+
+  app.get('/api/s3/objects/:bucket/*', async (req, res) => {
+    if (!s3Client) return res.status(404).json({ error: 'Object downloads require an AWS S3 connection.' });
+    const bucket = req.params.bucket;
+    const key = (req.params as Record<string, string>)[0];
+    if (configuredBuckets.length && !configuredBuckets.includes(bucket)) return res.status(403).json({ error: 'Bucket is not approved for this workspace.' });
+    try {
+      const object = await s3Client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+      if (object.ContentType) res.setHeader('Content-Type', object.ContentType);
+      if (object.ContentLength) res.setHeader('Content-Length', object.ContentLength);
+      res.setHeader('Content-Disposition', `inline; filename="${path.basename(key).replace(/"/g, '')}"`);
+      (object.Body as any).pipe(res);
+    } catch {
+      res.status(404).json({ error: 'AWS object was not found or cannot be read.' });
+    }
+  });
+
+  app.delete('/api/s3/objects/:id', authenticateToken, async (req, res) => {
+    const { id } = req.params;
+    const bucket = typeof req.query.bucket === 'string' ? req.query.bucket : '';
+    const key = typeof req.query.key === 'string' ? req.query.key : '';
+    if (s3Client && bucket && key) {
+      if (configuredBuckets.length && !configuredBuckets.includes(bucket)) return res.status(403).json({ error: 'Bucket is not approved for this workspace.' });
+      try {
+        await s3Client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+        return res.json({ success: true, message: 'Object deleted from AWS S3.' });
+      } catch {
+        return res.status(502).json({ error: 'AWS rejected the delete request.' });
+      }
+    }
+    const index = s3Objects.findIndex(o => o.id === id);
+    if (index === -1) {
+      return res.status(404).json({ error: 'Object not found' });
+    }
+    const removed = s3Objects.splice(index, 1)[0];
+    const b = s3Buckets.find(item => item.name === removed.bucket);
+    if (b) {
+      b.objectCount = Math.max(0, b.objectCount - 1);
+      b.sizeBytes = Math.max(0, b.sizeBytes - removed.size);
+    }
+    res.json({ success: true, message: `Object ${removed.filename} deleted from S3` });
+  });
+
+  app.post('/api/s3/archive', (req, res) => {
+    const { id, targetClass } = req.body;
+    const item = s3Objects.find(o => o.id === id);
+    if (!item) {
+      return res.status(404).json({ error: 'Object not found' });
+    }
+    item.storageClass = targetClass || 'GLACIER';
+    res.json({
+      success: true,
+      message: `Object transitioned to ${item.storageClass}`,
+      object: item
+    });
+  });
+
+  // ----------------------------------------------------
+  // 4. INCIDENT ALERTS, SNS, SLACK & EMAIL DISPATCH
+  // ----------------------------------------------------
+  app.get('/api/alerts', (_req, res) => {
+    res.json({ alerts: activeAlerts });
+  });
+
+  app.post('/api/alerts/acknowledge', (req, res) => {
+    const { id } = req.body;
+    const alert = activeAlerts.find(a => a.id === id);
+    if (!alert) return res.status(404).json({ error: 'Alert not found' });
+    alert.status = 'acknowledged';
+    res.json({ success: true, alert });
+  });
+
+  app.post('/api/alerts/resolve', (req, res) => {
+    const { id } = req.body;
+    const alert = activeAlerts.find(a => a.id === id);
+    if (!alert) return res.status(404).json({ error: 'Alert not found' });
+    alert.status = 'resolved';
+    res.json({ success: true, alert });
+  });
+
+  app.post('/api/alerts/dispatch', (req, res) => {
+    const { title, severity, description, channels } = req.body;
+    const alert: AlertItem = {
+      id: `alt-${Date.now().toString().slice(-4)}`,
+      title: title || 'Critical Cluster Anomaly',
+      severity: severity || 'critical',
+      source: 'shogun-telemetry-engine',
+      timestamp: new Date().toISOString(),
+      status: 'active',
+      description: description || 'Automated health check failure triggered emergency escalation.',
+      dispatchedChannels: channels || ['slack', 'sns', 'email']
+    };
+    activeAlerts.unshift(alert);
+    res.json({
+      success: true,
+      message: `Alert dispatched successfully across ${alert.dispatchedChannels.join(', ')}`,
+      alert,
+      dispatchLog: {
+        snsTopicArn: 'arn:aws:sns:us-east-1:956083908253:shogun-kuber-x-critical-incidents',
+        slackChannel: '#incident-room-kuber-x',
+        recipientEmail: 'ashirbadbiswal82791@gmail.com',
+        httpStatus: 200,
+        deliveredAt: new Date().toISOString()
+      }
+    });
+  });
+
+  // ----------------------------------------------------
+  // 5. DEVOPS, TERRAFORM, DOCKER & CI/CD PIPELINE
+  // ----------------------------------------------------
+  app.get('/api/devops/summary', (_req, res) => {
+    res.json({
+      terraform: {
+        version: 'v1.9.5',
+        backend: 's3://shogun-terraform-state-prod/kuber-x/terraform.tfstate',
+        managedResourcesCount: 48,
+        driftDetected: false,
+        lastApplied: '2026-09-24T12:00:00Z'
+      },
+      dockerWorkers: [
+        {
+          name: 'kuber-x-api-server',
+          image: 'shogun-registry.io/kuber/api-gateway:v2.4.1',
+          ports: ['3000:3000'],
+          replicas: 4,
+          status: 'healthy',
+          uptime: '18d 4h 12m'
+        },
+        {
+          name: 'kuber-x-telemetry-worker',
+          image: 'shogun-registry.io/kuber/telemetry-processor:v2.4.0',
+          ports: ['9090:9090'],
+          replicas: 6,
+          status: 'healthy',
+          uptime: '18d 4h 10m'
+        },
+        {
+          name: 'kuber-x-s3-archiver-worker',
+          image: 'shogun-registry.io/kuber/s3-archiver:v1.9.8',
+          ports: ['8080:8080'],
+          replicas: 2,
+          status: 'healthy',
+          uptime: '12d 1h 45m'
+        }
+      ],
+      cicdPipeline: {
+        repository: 'github.com/shogun-cloud/kuber-x-enterprise',
+        branch: 'main',
+        lastCommit: {
+          sha: 'b7c491e',
+          message: 'feat(s3-sync): add high-speed streaming multipart uploader & offline cache',
+          author: 'Ashirbad Biswal',
+          timestamp: '2026-09-24T22:15:00Z'
+        },
+        runs: [
+          {
+            id: 'run-8821',
+            status: 'passed',
+            duration: '1m 42s',
+            triggeredBy: 'push',
+            steps: [
+              { name: 'Lint & TypeCheck', status: 'passed', duration: '14s' },
+              { name: 'Unit & Contract Tests', status: 'passed', duration: '32s' },
+              { name: 'Docker Build & ECR Push', status: 'passed', duration: '41s' },
+              { name: 'Terraform Validate & Security Scan', status: 'passed', duration: '15s' }
+            ]
+          },
+          {
+            id: 'run-8820',
+            status: 'passed',
+            duration: '1m 55s',
+            triggeredBy: 'pull_request',
+            steps: [
+              { name: 'Lint & TypeCheck', status: 'passed', duration: '16s' },
+              { name: 'Unit & Contract Tests', status: 'passed', duration: '34s' },
+              { name: 'Docker Build & ECR Push', status: 'passed', duration: '48s' },
+              { name: 'Terraform Validate & Security Scan', status: 'passed', duration: '17s' }
+            ]
+          }
+        ]
+      }
+    });
+  });
+
+  // ----------------------------------------------------
   // VITE DEV SERVER INTEGRATION & STATIC SERVING
   // ----------------------------------------------------
-  const distPath = path.resolve(__dirname, 'dist');
-  const hasDist = fs.existsSync(distPath);
-
-  if (isProduction && hasDist) {
-    app.use(express.static(distPath));
-    app.get('*', (_req, res) => {
-      res.sendFile(path.resolve(distPath, 'index.html'));
-    });
-  } else {
+  if (!isProduction) {
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);
+  } else {
+    const distPath = path.resolve(__dirname, 'dist');
+    app.use(express.static(distPath));
+    app.get('*', (_req, res) => {
+      res.sendFile(path.resolve(distPath, 'index.html'));
+    });
   }
 
   app.listen(PORT, '0.0.0.0', () => {

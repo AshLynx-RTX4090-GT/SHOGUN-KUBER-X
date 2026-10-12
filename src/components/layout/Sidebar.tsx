@@ -10,10 +10,14 @@ import {
   Sliders, 
   Cpu, 
   HardDrive,
-  Cloud,
-  X
+  X,
+  CreditCard,
+  UserRound,
+  LifeBuoy,
+  UsersRound,
+  Truck
 } from 'lucide-react';
-import { SystemMetrics, AwsAccountStatus, AwsDiscoveryData } from '../../types';
+import { SystemMetrics } from '../../types';
 
 export type NavTabId = 
   | 'overview' 
@@ -23,7 +27,12 @@ export type NavTabId =
   | 'alerts' 
   | 'security' 
   | 'observability' 
-  | 'widgets';
+  | 'widgets'
+  | 'billing'
+  | 'profile'
+  | 'support'
+  | 'collaboration'
+  | 'deliveries';
 
 interface SidebarProps {
   currentTab: NavTabId;
@@ -32,8 +41,6 @@ interface SidebarProps {
   isOpenMobile: boolean;
   onCloseMobile: () => void;
   metrics: SystemMetrics | null;
-  awsStatus?: AwsAccountStatus | null;
-  discovery?: AwsDiscoveryData | null;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -43,38 +50,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
   isOpenMobile,
   onCloseMobile,
   metrics,
-  awsStatus,
-  discovery,
 }) => {
-  const isAwsConnected = awsStatus?.connected === true;
-  const s3Count = discovery?.summary?.s3BucketCount ?? (isAwsConnected ? 0 : 0);
-  const nodeCount = (discovery?.summary?.ec2InstanceCount || discovery?.summary?.eksClusterCount) ?? 0;
-  const alertCount = discovery?.summary?.cloudWatchAlarmCount ?? 0;
-
-  const navItems: { id: NavTabId; label: string; icon: React.ComponentType<{ className?: string }>; badge?: string; badgeColor?: string }[] = [
+  const navItems: { id: NavTabId; label: string; icon: React.ComponentType<{ className?: string }>; badge?: string }[] = [
     { id: 'overview', label: 'Overview Analytics', icon: LayoutDashboard },
-    { 
-      id: 'kubernetes', 
-      label: 'Kubernetes Cluster', 
-      icon: Layers, 
-      badge: isAwsConnected ? `${nodeCount} Nodes` : 'EKS / EC2' 
-    },
-    { 
-      id: 'storage', 
-      label: 'AWS S3 Storage', 
-      icon: Database, 
-      badge: isAwsConnected ? `${s3Count} Buckets` : 'S3 Vault' 
-    },
+    { id: 'kubernetes', label: 'Kubernetes Cluster', icon: Layers, badge: '8 Nodes' },
+    { id: 'storage', label: 'AWS S3 Storage', icon: Database, badge: '3 Buckets' },
     { id: 'devops', label: 'DevOps & Pipelines', icon: Terminal, badge: 'CI/CD' },
-    { 
-      id: 'alerts', 
-      label: 'Incidents & Alerts', 
-      icon: BellRing, 
-      badge: isAwsConnected && alertCount > 0 ? `${alertCount} Alarms` : 'SNS/Slack' 
-    },
+    { id: 'alerts', label: 'Incidents & Alerts', icon: BellRing, badge: 'SNS/Slack' },
     { id: 'security', label: 'Security & RBAC', icon: ShieldAlert, badge: 'JWT' },
     { id: 'observability', label: 'Prometheus & Grafana', icon: Activity },
     { id: 'widgets', label: 'Widget Layouts', icon: Sliders },
+    { id: 'billing', label: 'Plans & Billing', icon: CreditCard, badge: 'Razorpay' },
+    { id: 'profile', label: 'Profile & Settings', icon: UserRound, badge: 'Account' },
+    { id: 'support', label: 'AI Help & Status', icon: LifeBuoy, badge: '24/7' },
+    { id: 'collaboration', label: 'Team & Versions', icon: UsersRound, badge: 'Sync' },
+    { id: 'deliveries', label: 'Delivery Tracking', icon: Truck, badge: 'India' },
   ];
 
   return (
@@ -109,7 +99,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
 
           <div className="text-[11px] font-mono uppercase tracking-wider text-slate-400 px-3 mb-2 font-semibold">
-            SYSTEM MODULES
+            System Modules
           </div>
 
           <nav className="space-y-1">
@@ -123,7 +113,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     onSelectTab(item.id);
                     onCloseMobile();
                   }}
-                  className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
+                  className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-xs font-medium transition-colors ${
                     isActive
                       ? isDarkMode
                         ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 shadow-sm'
@@ -133,16 +123,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       : 'hover:bg-slate-200/60 hover:text-slate-900'
                   }`}
                 >
-                  <div className="flex items-center gap-2.5 truncate">
-                    <Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-cyan-400' : 'text-slate-400'}`} />
+                  <div className="flex items-center gap-2.5">
+                    <Icon className={`w-4 h-4 ${isActive ? 'text-cyan-400' : 'text-slate-400'}`} />
                     <span className="truncate">{item.label}</span>
                   </div>
 
                   {item.badge && (
-                    <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded shrink-0 ${
-                      item.badgeColor || (isActive
+                    <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${
+                      isActive
                         ? isDarkMode ? 'bg-cyan-500/20 text-cyan-300' : 'bg-cyan-100 text-cyan-800'
-                        : isDarkMode ? 'bg-slate-800 text-slate-400' : 'bg-slate-200 text-slate-600')
+                        : isDarkMode ? 'bg-slate-800 text-slate-400' : 'bg-slate-200 text-slate-600'
                     }`}>
                       {item.badge}
                     </span>
@@ -158,35 +148,46 @@ export const Sidebar: React.FC<SidebarProps> = ({
           isDarkMode ? 'border-slate-800 bg-slate-950/40' : 'border-slate-200 bg-white/40'
         }`}>
           <div className="text-[11px] font-mono uppercase tracking-wider text-slate-400 mb-2 flex items-center justify-between">
-            <span>AWS Telemetry</span>
-            <span className={isAwsConnected ? 'text-emerald-400' : 'text-amber-400'}>
-              {isAwsConnected ? 'Live' : 'Standby'}
-            </span>
+            <span>Resource Usage</span>
+            <span className="text-emerald-500">Nominal</span>
           </div>
 
           <div className="space-y-2 text-xs">
-            {/* Real AWS S3 / EC2 info */}
-            <div>
-              <div className="flex justify-between text-slate-400 mb-1">
-                <span className="flex items-center gap-1">
-                  <Database className="w-3 h-3 text-purple-400" />
-                  <span>S3 Buckets</span>
-                </span>
-                <span className="font-mono tabular-nums text-slate-200">
-                  {s3Count} Active
-                </span>
-              </div>
-            </div>
-
+            {/* CPU Metric */}
             <div>
               <div className="flex justify-between text-slate-400 mb-1">
                 <span className="flex items-center gap-1">
                   <Cpu className="w-3 h-3 text-cyan-400" />
-                  <span>EC2 / EKS Nodes</span>
+                  <span>CPU Cluster</span>
                 </span>
                 <span className="font-mono tabular-nums text-slate-200">
-                  {nodeCount} Nodes
+                  {metrics?.cpuUsagePercent ?? 48}%
                 </span>
+              </div>
+              <div className="w-full bg-slate-700/30 rounded-full h-1.5 overflow-hidden">
+                <div 
+                  className="bg-cyan-400 h-full rounded-full transition-all duration-500"
+                  style={{ width: `${metrics?.cpuUsagePercent ?? 48}%` }}
+                />
+              </div>
+            </div>
+
+            {/* RAM Metric */}
+            <div>
+              <div className="flex justify-between text-slate-400 mb-1">
+                <span className="flex items-center gap-1">
+                  <HardDrive className="w-3 h-3 text-sky-400" />
+                  <span>Memory RAM</span>
+                </span>
+                <span className="font-mono tabular-nums text-slate-200">
+                  {metrics?.memoryUsagePercent ?? 62}%
+                </span>
+              </div>
+              <div className="w-full bg-slate-700/30 rounded-full h-1.5 overflow-hidden">
+                <div 
+                  className="bg-sky-400 h-full rounded-full transition-all duration-500"
+                  style={{ width: `${metrics?.memoryUsagePercent ?? 62}%` }}
+                />
               </div>
             </div>
           </div>

@@ -8,6 +8,8 @@
 
   body {
     font-family: var(--font-sans);
+    margin: 0;
+    background: #020617;
   }
 
   /* Custom scrollbar for dark dashboard aesthetics */
@@ -29,4 +31,446 @@
 
 .tabular-nums {
   font-variant-numeric: tabular-nums;
+}
+
+button,
+a,
+input,
+select,
+textarea {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button,
+.glass-button {
+  transition: transform 180ms ease, box-shadow 180ms ease, background-color 180ms ease, border-color 180ms ease;
+}
+
+button:not(:disabled):active,
+.glass-button:not(:disabled):active {
+  transform: scale(0.98);
+}
+
+.glass-panel,
+.glass-button {
+  backdrop-filter: blur(18px) saturate(135%);
+  -webkit-backdrop-filter: blur(18px) saturate(135%);
+}
+
+.glass-panel {
+  background: rgba(15, 23, 42, 0.58);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 16px 45px rgba(2, 6, 23, 0.18);
+}
+
+.glass-button {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18), 0 5px 18px rgba(8, 145, 178, 0.12);
+}
+
+.glass-button:hover:not(:disabled) {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28), 0 8px 25px rgba(8, 145, 178, 0.22);
+}
+
+a {
+  text-decoration-line: underline;
+  text-underline-offset: 3px;
+}
+
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 3px solid #facc15;
+  outline-offset: 3px;
+}
+
+.app-shell {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+}
+
+.page-transition {
+  animation: page-enter 260ms ease-out both;
+}
+
+@keyframes page-enter {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.app-shell::before,
+.app-shell::after {
+  content: '';
+  position: fixed;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0;
+  transition: opacity 500ms ease;
+}
+
+.app-shell::before {
+  width: 62vw;
+  height: 48vh;
+  top: 6vh;
+  left: 16vw;
+  background: radial-gradient(ellipse at center, rgba(45, 212, 191, 0.23), rgba(45, 212, 191, 0) 68%);
+  filter: blur(30px);
+  animation: aurora-drift 14s ease-in-out infinite alternate;
+}
+
+.app-shell::after {
+  width: 52vw;
+  height: 42vh;
+  right: -8vw;
+  bottom: 2vh;
+  background: radial-gradient(ellipse at center, rgba(251, 146, 60, 0.19), rgba(251, 146, 60, 0) 70%);
+  filter: blur(34px);
+  animation: aurora-drift-reverse 18s ease-in-out infinite alternate;
+}
+
+.app-shell > * {
+  position: relative;
+  z-index: 1;
+}
+
+.theme-light {
+  background: linear-gradient(135deg, #f7fffc 0%, #effaf7 48%, #fff7ed 100%) !important;
+  color: #172033;
+}
+
+.theme-light .glass-panel {
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 16px 45px rgba(37, 74, 72, 0.12);
+}
+
+.theme-light .glass-button:not(.bg-cyan-500) {
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.theme-light a {
+  font-weight: 650;
+}
+
+.theme-light::before,
+.theme-light::after {
+  opacity: 1;
+}
+
+.theme-light .bg-slate-950,
+.theme-light .bg-slate-950\/40,
+.theme-light .bg-slate-950\/30,
+.theme-light .bg-slate-950\/50,
+.theme-light .bg-slate-900,
+.theme-light .bg-slate-900\/40,
+.theme-light .bg-slate-900\/60,
+.theme-light .bg-slate-900\/95,
+.theme-light .bg-slate-800\/40,
+.theme-light .bg-slate-800\/60,
+.theme-light .bg-slate-800\/80 {
+  background-color: rgba(255, 255, 255, 0.68) !important;
+}
+
+/* Dark-mode utility classes sometimes contain white labels. Recolor only
+   those labels when their parent becomes a light glass surface. */
+.theme-light .bg-slate-950 .text-white,
+.theme-light .bg-slate-950\/40 .text-white,
+.theme-light .bg-slate-950\/30 .text-white,
+.theme-light .bg-slate-950\/50 .text-white,
+.theme-light .bg-slate-900 .text-white,
+.theme-light .bg-slate-900\/40 .text-white,
+.theme-light .bg-slate-900\/60 .text-white,
+.theme-light .bg-slate-900\/95 .text-white {
+  color: #172033 !important;
+}
+
+.theme-light input::placeholder,
+.theme-light textarea::placeholder {
+  color: #64748b !important;
+  opacity: 1;
+}
+
+.theme-light .text-slate-100,
+.theme-light .text-slate-200,
+.theme-light .text-slate-300 {
+  color: #172033 !important;
+}
+
+.theme-light .text-slate-400,
+.theme-light .text-slate-500 {
+  color: #526174 !important;
+}
+
+.theme-light .text-slate-600 {
+  color: #64748b !important;
+}
+
+.theme-light .border-slate-800,
+.theme-light .border-slate-700,
+.theme-light .border-slate-700\/40,
+.theme-light .border-slate-800\/60 {
+  border-color: rgba(148, 163, 184, 0.3) !important;
+}
+
+.theme-light .bg-slate-800,
+.theme-light .bg-slate-700\/30 {
+  background-color: rgba(226, 232, 240, 0.72) !important;
+}
+
+.theme-light .shadow-xl,
+.theme-light .shadow-lg {
+  box-shadow: 0 18px 50px rgba(37, 74, 72, 0.13) !important;
+}
+
+@keyframes aurora-drift {
+  from { transform: translate3d(-8%, -2%, 0) rotate(-4deg) scale(0.92); }
+  to { transform: translate3d(9%, 7%, 0) rotate(5deg) scale(1.08); }
+}
+
+@keyframes aurora-drift-reverse {
+  from { transform: translate3d(5%, 4%, 0) rotate(5deg) scale(1.05); }
+  to { transform: translate3d(-10%, -5%, 0) rotate(-5deg) scale(0.9); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-shell::before,
+  .app-shell::after {
+    animation: none;
+  }
+}
+
+/*
+ * Kuber Console design system
+ * A deliberately quiet, white operations surface inspired by the supplied
+ * cluster reference.  These tokens are presentation-only: component state,
+ * routes, actions, and API behaviour remain unchanged.
+ */
+:root {
+  --kx-page: #f6f7fa;
+  --kx-surface: #ffffff;
+  --kx-border: #e4e6ed;
+  --kx-text: #1d2230;
+  --kx-muted: #72798a;
+  --kx-purple: #7652ef;
+  --kx-purple-dark: #6240dd;
+  --kx-success: #14b88a;
+}
+
+.app-shell {
+  background: var(--kx-page) !important;
+  color: var(--kx-text) !important;
+}
+
+.app-shell::before,
+.app-shell::after {
+  display: none;
+}
+
+.theme-light,
+.theme-dark {
+  background: var(--kx-page) !important;
+  color: var(--kx-text) !important;
+}
+
+/* Establish the reference's card rhythm across the existing dashboard. */
+.theme-light .glass-panel,
+.theme-dark .glass-panel,
+.theme-light .bg-slate-950,
+.theme-light .bg-slate-950\/40,
+.theme-light .bg-slate-950\/30,
+.theme-light .bg-slate-950\/50,
+.theme-light .bg-slate-900,
+.theme-light .bg-slate-900\/40,
+.theme-light .bg-slate-900\/60,
+.theme-light .bg-slate-900\/95,
+.theme-light .bg-slate-800\/40,
+.theme-light .bg-slate-800\/60,
+.theme-light .bg-slate-800\/80,
+.theme-dark .bg-slate-950,
+.theme-dark .bg-slate-950\/40,
+.theme-dark .bg-slate-950\/30,
+.theme-dark .bg-slate-950\/50,
+.theme-dark .bg-slate-900,
+.theme-dark .bg-slate-900\/40,
+.theme-dark .bg-slate-900\/60,
+.theme-dark .bg-slate-900\/95,
+.theme-dark .bg-slate-800\/40,
+.theme-dark .bg-slate-800\/60,
+.theme-dark .bg-slate-800\/80 {
+  background-color: var(--kx-surface) !important;
+}
+
+.theme-light .glass-panel,
+.theme-dark .glass-panel {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  border: 1px solid var(--kx-border);
+  box-shadow: 0 2px 8px rgba(30, 35, 50, 0.035);
+}
+
+.theme-light .border-slate-800,
+.theme-light .border-slate-700,
+.theme-light .border-slate-700\/40,
+.theme-light .border-slate-800\/60,
+.theme-light .border-slate-200,
+.theme-dark .border-slate-800,
+.theme-dark .border-slate-700,
+.theme-dark .border-slate-700\/40,
+.theme-dark .border-slate-800\/60,
+.theme-dark .border-slate-200 {
+  border-color: var(--kx-border) !important;
+}
+
+.theme-light .text-slate-100,
+.theme-light .text-slate-200,
+.theme-light .text-slate-300,
+.theme-light .text-white,
+.theme-dark .text-slate-100,
+.theme-dark .text-slate-200,
+.theme-dark .text-slate-300,
+.theme-dark .text-white {
+  color: var(--kx-text) !important;
+}
+
+.theme-light .text-slate-400,
+.theme-light .text-slate-500,
+.theme-light .text-slate-600,
+.theme-dark .text-slate-400,
+.theme-dark .text-slate-500,
+.theme-dark .text-slate-600 {
+  color: var(--kx-muted) !important;
+}
+
+/* Purple is reserved for deliberate action and current-state affordances. */
+.theme-light .bg-cyan-500,
+.theme-light .bg-cyan-600,
+.theme-light .bg-cyan-700,
+.theme-dark .bg-cyan-500,
+.theme-dark .bg-cyan-600,
+.theme-dark .bg-cyan-700 {
+  background-color: var(--kx-purple) !important;
+}
+
+.theme-light .text-cyan-400,
+.theme-light .text-cyan-300,
+.theme-light .text-cyan-500,
+.theme-dark .text-cyan-400,
+.theme-dark .text-cyan-300,
+.theme-dark .text-cyan-500 {
+  color: var(--kx-purple) !important;
+}
+
+.theme-light .bg-cyan-50,
+.theme-light .bg-cyan-100,
+.theme-light .bg-cyan-500\/10,
+.theme-light .bg-cyan-500\/20,
+.theme-light .bg-cyan-950\/60,
+.theme-dark .bg-cyan-50,
+.theme-dark .bg-cyan-100,
+.theme-dark .bg-cyan-500\/10,
+.theme-dark .bg-cyan-500\/20,
+.theme-dark .bg-cyan-950\/60 {
+  background-color: #f1eeff !important;
+}
+
+.theme-light .border-cyan-200,
+.theme-light .border-cyan-500\/20,
+.theme-dark .border-cyan-200,
+.theme-dark .border-cyan-500\/20 {
+  border-color: #dcd3ff !important;
+}
+
+.theme-light button.bg-cyan-500,
+.theme-light button.bg-cyan-600,
+.theme-light button.bg-cyan-700,
+.theme-dark button.bg-cyan-500,
+.theme-dark button.bg-cyan-600,
+.theme-dark button.bg-cyan-700 {
+  color: white !important;
+  border-radius: 4px;
+  box-shadow: none;
+}
+
+.theme-light button.bg-cyan-500:hover,
+.theme-light button.bg-cyan-600:hover,
+.theme-light button.bg-cyan-700:hover,
+.theme-dark button.bg-cyan-500:hover,
+.theme-dark button.bg-cyan-600:hover,
+.theme-dark button.bg-cyan-700:hover {
+  background-color: var(--kx-purple-dark) !important;
+}
+
+.app-shell header {
+  min-height: 56px;
+  height: auto;
+  border-color: var(--kx-border) !important;
+  box-shadow: 0 1px 0 rgba(28, 34, 48, 0.02);
+}
+
+.app-shell aside {
+  background: #fbfbfc !important;
+  border-color: var(--kx-border) !important;
+}
+
+.app-shell main {
+  background-color: var(--kx-page);
+  padding: clamp(1rem, 2.4vw, 2rem);
+}
+
+.app-shell footer {
+  background: var(--kx-surface);
+  border-color: var(--kx-border) !important;
+}
+
+.theme-dark .delivery-dashboard .bg-white {
+  background-color: var(--kx-surface) !important;
+}
+
+.theme-dark .delivery-dashboard .bg-slate-50,
+.theme-dark .delivery-dashboard .bg-slate-100 {
+  background-color: #2a2b36 !important;
+}
+
+.theme-dark .delivery-dashboard .text-slate-900,
+.theme-dark .delivery-dashboard .text-slate-800,
+.theme-dark .delivery-dashboard .text-slate-700 {
+  color: var(--kx-text) !important;
+}
+
+.theme-dark .delivery-dashboard .text-slate-600,
+.theme-dark .delivery-dashboard .text-slate-500 {
+  color: var(--kx-muted) !important;
+}
+
+.theme-dark .delivery-dashboard .border-slate-200,
+.theme-dark .delivery-dashboard .border-slate-100 {
+  border-color: var(--kx-border) !important;
+}
+
+/* Keep dark mode comfortable while retaining the reference's information density. */
+.theme-dark {
+  --kx-page: #171821;
+  --kx-surface: #20212c;
+  --kx-border: #343644;
+  --kx-text: #f1f1f5;
+  --kx-muted: #a9acb8;
+}
+
+.theme-dark .app-shell,
+.theme-dark .app-shell main,
+.theme-dark .app-shell aside,
+.theme-dark .app-shell header,
+.theme-dark .app-shell footer {
+  background-color: var(--kx-page) !important;
+}
+
+.theme-dark .app-shell header,
+.theme-dark .app-shell footer,
+.theme-dark .app-shell aside {
+  background-color: var(--kx-surface) !important;
+}
+
+@media (max-width: 767px) {
+  .app-shell main { padding: 1rem; }
+  .app-shell aside { box-shadow: 14px 0 34px rgba(20, 21, 31, 0.16); }
 }

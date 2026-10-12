@@ -1,17 +1,4 @@
-import { 
-  AlertItem, 
-  AwsAccountStatus, 
-  AwsDiscoveryData, 
-  MetricHistoryPoint, 
-  OfflineQueueItem, 
-  S3Bucket, 
-  S3MediaObject, 
-  SystemMetrics, 
-  User,
-  ClusterStatusResponse,
-  TelemetryMetricsResponse,
-  StorageArtifactsResponse
-} from '../types';
+import { AlertItem, DeliveryAnalytics, DeliveryEndpoint, DeliveryStatus, MetricHistoryPoint, OfflineQueueItem, S3Bucket, S3MediaObject, SystemMetrics, User } from '../types';
 
 const STORAGE_KEYS = {
   TOKEN: 'shogun_jwt_token',
@@ -60,105 +47,6 @@ class ApiService {
   }
 
   // ------------------------------------
-  // AWS MANAGEMENT ACCOUNT INTEGRATION
-  // ------------------------------------
-  async getAwsStatus(): Promise<AwsAccountStatus> {
-    try {
-      const res = await fetch('/api/aws/status');
-      if (!res.ok) throw new Error('Failed to fetch AWS status');
-      return await res.json();
-    } catch (err: any) {
-      return {
-        connected: false,
-        region: 'us-east-1',
-        error: err.message,
-      };
-    }
-  }
-
-  async connectAws(credentials: {
-    accessKeyId: string;
-    secretAccessKey: string;
-    sessionToken?: string;
-    region: string;
-  }): Promise<{ success: boolean; account?: string; arn?: string; error?: string }> {
-    const res = await fetch('/api/aws/connect', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(credentials),
-    });
-    return await res.json();
-  }
-
-  async switchAwsRegion(region: string): Promise<{ success: boolean; region: string }> {
-    const res = await fetch('/api/aws/region', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ region }),
-    });
-    return await res.json();
-  }
-
-  async disconnectAws(): Promise<boolean> {
-    try {
-      const res = await fetch('/api/aws/disconnect', { method: 'POST' });
-      return res.ok;
-    } catch {
-      return false;
-    }
-  }
-
-  async getAwsDiscovery(region?: string): Promise<AwsDiscoveryData> {
-    try {
-      const url = region ? `/api/aws/discovery?region=${encodeURIComponent(region)}` : '/api/aws/discovery';
-      const res = await fetch(url);
-      if (!res.ok) throw new Error('Failed to discover AWS services');
-      const data = await res.json();
-      localStorage.setItem(STORAGE_KEYS.OFFLINE_CACHE + '_aws_discovery', JSON.stringify(data));
-      return data;
-    } catch (err: any) {
-      const cached = localStorage.getItem(STORAGE_KEYS.OFFLINE_CACHE + '_aws_discovery');
-      if (cached) return JSON.parse(cached);
-      return {
-        connected: false,
-        region: region || 'us-east-1',
-        s3Buckets: [],
-        eksClusters: [],
-        ec2Instances: [],
-        snsTopics: [],
-        cloudWatchAlarms: [],
-        error: err.message,
-      };
-    }
-  }
-
-  async createAwsBucket(bucketName: string): Promise<any> {
-    const res = await fetch('/api/aws/create-bucket', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ bucketName }),
-    });
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.error || 'Failed to create bucket in AWS');
-    }
-    return await res.json();
-  }
-
-  async createAwsSnsTopic(topicName: string): Promise<any> {
-    const res = await fetch('/api/aws/create-sns-topic', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ topicName }),
-    });
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.error || 'Failed to create SNS topic in AWS');
-    }
-    return await res.json();
-  }
-
-  // ------------------------------------
   // AUTH
   // ------------------------------------
   async login(role: string = 'super_admin'): Promise<{ token: string; user: User }> {
@@ -173,84 +61,60 @@ class ApiService {
       this.setToken(data.token);
       localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(data.user));
       return data;
-    } catch {
+    } catch (err) {
+      console.warn('Backend login fallback to local user session', err);
+      // Fallback local session if offline
       const mockUser: User = {
         id: 'usr-1',
-        email: 'ashirbadbiswal82791@gmail.com',
+        email: 'ashirbad.admin@shogun-kuber.io',
         username: 'Ashirbad Biswal',
         role: role as any,
         avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
         permissions: ['cluster:write', 'storage:upload', 'storage:delete', 'alerts:trigger', 'iac:apply', 'pipeline:trigger', 'rbac:admin']
       };
-      return { token: 'jwt-auth-token', user: mockUser };
+      return { token: 'mock-jwt-token-offline', user: mockUser };
     }
   }
 
-  async generateToken(role: string = 'super_admin', expiresIn: string = '30d'): Promise<{ token: string; user: User; expiresIn: string }> {
-    const res = await fetch(`/api/auth/token?role=${encodeURIComponent(role)}&expiresIn=${encodeURIComponent(expiresIn)}`);
-    if (!res.ok) throw new Error('Failed to generate integration token');
-    return await res.json();
-  }
-
-  async verifyToken(token: string): Promise<{ valid: boolean; claims?: any; error?: string }> {
-    const res = await fetch(`/api/auth/verify?token=${encodeURIComponent(token)}`);
-    return await res.json();
-  }
-
   // ------------------------------------
-  // AWS EKS & TELEMETRY CORE ENDPOINTS
-  // ------------------------------------
-  async getClusterStatus(): Promise<ClusterStatusResponse> {
-    const res = await fetch('/api/cluster/status');
-    if (!res.ok) throw new Error('Failed to fetch EKS cluster status');
-    return await res.json();
-  }
-
-  async getTelemetryMetrics(): Promise<TelemetryMetricsResponse> {
-    const res = await fetch('/api/telemetry/metrics');
-    if (!res.ok) throw new Error('Failed to fetch CloudWatch telemetry metrics');
-    return await res.json();
-  }
-
-  async getStorageArtifacts(): Promise<StorageArtifactsResponse> {
-    const res = await fetch('/api/storage/artifacts');
-    if (!res.ok) throw new Error('Failed to fetch S3 pipeline storage artifacts');
-    return await res.json();
-  }
-
-  // ------------------------------------
-  // METRICS & TELEMETRY (REAL ZEROES WHEN DISCONNECTED)
+  // METRICS & TELEMETRY
   // ------------------------------------
   async getCurrentMetrics(): Promise<{ cluster: any; system: SystemMetrics }> {
     try {
       const res = await fetch('/api/metrics/current');
       if (!res.ok) throw new Error('Failed to fetch metrics');
-      return await res.json();
-    } catch {
+      const data = await res.json();
+      // Cache metrics for offline view
+      localStorage.setItem(STORAGE_KEYS.OFFLINE_CACHE + '_metrics', JSON.stringify(data));
+      return data;
+    } catch (err) {
+      const cached = localStorage.getItem(STORAGE_KEYS.OFFLINE_CACHE + '_metrics');
+      if (cached) return JSON.parse(cached);
+      // Synthetic fallback
       return {
         cluster: {
-          name: 'Not Connected',
-          kubernetesVersion: 'N/A',
-          nodesTotal: 0,
-          nodesReady: 0,
-          podsTotal: 0,
-          podsRunning: 0,
-          podsPending: 0,
-          podsFailed: 0,
-          namespaces: []
+          name: 'shogun-prod-kuber-x-us-east',
+          kubernetesVersion: 'v1.31.2-eks.1',
+          nodesTotal: 8,
+          nodesReady: 8,
+          podsTotal: 124,
+          podsRunning: 118,
+          podsPending: 4,
+          podsFailed: 2,
+          namespaces: ['default', 'production-apps', 'telemetry-kuber', 'kube-system']
         },
         system: {
-          cpuUsagePercent: 0,
-          memoryUsagePercent: 0,
-          memoryUsedGB: '0',
-          memoryTotalGB: 0,
-          networkRxMBps: 0,
-          networkTxMBps: 0,
-          iopsRead: 0,
-          iopsWrite: 0,
-          requestsPerSecond: 0,
-          errorRatePercent: 0,
-          latencies: { p50: 0, p95: 0, p99: 0 }
+          cpuUsagePercent: 54,
+          memoryUsagePercent: 68,
+          memoryUsedGB: '43.5',
+          memoryTotalGB: 64,
+          networkRxMBps: 210,
+          networkTxMBps: 285,
+          iopsRead: 1400,
+          iopsWrite: 3950,
+          requestsPerSecond: 15400,
+          errorRatePercent: 0.05,
+          latencies: { p50: 18, p95: 44, p99: 89 }
         }
       };
     }
@@ -260,15 +124,52 @@ class ApiService {
     try {
       const res = await fetch('/api/metrics/history');
       if (!res.ok) throw new Error('Failed to fetch metric history');
-      return await res.json();
+      const data = await res.json();
+      return data;
     } catch {
-      return { points: [] };
+      // Offline fallback points
+      const points: MetricHistoryPoint[] = [];
+      const now = Date.now();
+      for (let i = 29; i >= 0; i--) {
+        points.push({
+          timestamp: new Date(now - i * 5000).toLocaleTimeString([], { hour12: false }),
+          cpu: 50 + Math.sin(i * 0.4) * 15,
+          memory: 65 + Math.cos(i * 0.3) * 10,
+          network: 280 + Math.sin(i * 0.5) * 60,
+          rps: 14000 + Math.sin(i * 0.3) * 2000,
+          errorRate: 0.04
+        });
+      }
+      return { points };
     }
   }
 
   // ------------------------------------
   // AWS S3 STORAGE
   // ------------------------------------
+  async getAwsStatus(): Promise<any> {
+    const res = await fetch('/api/aws/status');
+    if (!res.ok) throw new Error('Unable to verify AWS connection');
+    return res.json();
+  }
+
+  async enableS3Versioning(bucket?: string): Promise<any> {
+    const res = await fetch('/api/aws/s3/enable-versioning', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}) },
+      body: JSON.stringify(bucket ? { bucket } : {}),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Unable to enable S3 Versioning');
+    return data;
+  }
+
+  async getIntegrations(): Promise<{ integrations: any[] }> {
+    const res = await fetch('/api/integrations');
+    if (!res.ok) throw new Error('Unable to load integrations');
+    return res.json();
+  }
+
   async getBuckets(): Promise<{ connectedToRealAws: boolean; region: string; buckets: S3Bucket[] }> {
     try {
       const res = await fetch('/api/s3/buckets');
@@ -278,105 +179,110 @@ class ApiService {
       return {
         connectedToRealAws: false,
         region: 'us-east-1',
-        buckets: []
+        buckets: [
+          {
+            name: 'kuber-x-media-assets-prod',
+            region: 'us-east-1',
+            created: '2026-01-15T08:00:00Z',
+            objectCount: 42,
+            sizeBytes: 184582912,
+            versioning: true,
+            encryption: 'AES256',
+            publicAccessBlock: true
+          }
+        ]
       };
     }
   }
 
-  async getObjects(bucket: string, type?: string, search?: string): Promise<{ count: number; objects: S3MediaObject[] }> {
+  async getObjects(bucket?: string, type?: string, search?: string): Promise<{ count: number; objects: S3MediaObject[] }> {
     try {
       const params = new URLSearchParams();
       if (bucket) params.set('bucket', bucket);
-      if (type) params.set('type', type);
+      if (type && type !== 'all') params.set('type', type);
       if (search) params.set('search', search);
 
       const res = await fetch(`/api/s3/objects?${params.toString()}`);
       if (!res.ok) throw new Error('Failed to fetch S3 objects');
-      return await res.json();
+      const data = await res.json();
+      localStorage.setItem(STORAGE_KEYS.OFFLINE_CACHE + '_s3_objects', JSON.stringify(data.objects));
+      return data;
     } catch {
+      const cached = localStorage.getItem(STORAGE_KEYS.OFFLINE_CACHE + '_s3_objects');
+      if (cached) {
+        return { count: JSON.parse(cached).length, objects: JSON.parse(cached) };
+      }
       return { count: 0, objects: [] };
     }
   }
 
-  async uploadObject(
-    bucketOrPayload: string | { bucket: string; filename: string; mimeType: string; contentBase64?: string },
-    filenameArg?: string,
-    mimeTypeArg?: string,
-    contentBase64Arg?: string
-  ): Promise<any> {
-    let bucket: string;
-    let filename: string;
-    let mimeType: string;
-    let contentBase64: string | undefined;
-
-    if (typeof bucketOrPayload === 'object') {
-      bucket = bucketOrPayload.bucket;
-      filename = bucketOrPayload.filename;
-      mimeType = bucketOrPayload.mimeType;
-      contentBase64 = bucketOrPayload.contentBase64;
-    } else {
-      bucket = bucketOrPayload;
-      filename = filenameArg || '';
-      mimeType = mimeTypeArg || 'application/octet-stream';
-      contentBase64 = contentBase64Arg;
-    }
-
+  async uploadObject(payload: {
+    bucket?: string;
+    filename: string;
+    mimeType?: string;
+    size?: number;
+    contentBase64?: string;
+    tags?: string[];
+    keyPrefix?: 'workspace-uploads' | 'eks-manifests' | 'cloudformation-templates';
+  }): Promise<{ success: boolean; object: S3MediaObject; message: string }> {
     if (!this.isOnline) {
-      const offlineId = `off-upload-${Date.now()}`;
-      this.enqueueMutation({
-        id: offlineId,
+      const queuedItem: OfflineQueueItem = {
+        id: `queue-${Date.now()}`,
         action: 's3_upload',
+        payload,
         timestamp: new Date().toISOString(),
-        payload: { bucket, filename, mimeType, contentBase64 },
-        status: 'pending',
-      });
+        status: 'pending'
+      };
+      this.enqueueOfflineItem(queuedItem);
+
+      // Return local synthetic object so UI updates immediately
+      const syntheticObj: S3MediaObject = {
+        id: `s3-offline-${Date.now()}`,
+        bucket: payload.bucket || 'kuber-x-media-assets-prod',
+        key: `media/uploads/${payload.filename}`,
+        filename: payload.filename,
+        size: payload.size || 1024000,
+        mimeType: payload.mimeType || 'application/octet-stream',
+        type: payload.mimeType?.startsWith('image/') ? 'image' : payload.mimeType?.startsWith('video/') ? 'video' : payload.mimeType?.startsWith('audio/') ? 'audio' : 'document',
+        url: payload.contentBase64 || '',
+        storageClass: 'STANDARD',
+        lastModified: new Date().toISOString(),
+        uploadedBy: 'ashirbad.sre@shogun-cloud.io (Offline Queued)',
+        tags: ['offline-queued', ...(payload.tags || [])]
+      };
       return {
         success: true,
-        queued: true,
-        message: `Network offline. Upload for [${filename}] queued for automatic sync.`,
-        object: {
-          id: offlineId,
-          bucket,
-          key: `offline/${filename}`,
-          filename,
-          size: 1024,
-          mimeType,
-          type: mimeType.startsWith('image/') ? 'image' : mimeType.startsWith('video/') ? 'video' : 'document',
-          url: '',
-          storageClass: 'STANDARD',
-          lastModified: new Date().toISOString(),
-          uploadedBy: 'Offline User',
-          tags: ['offline-queued']
-        }
+        message: 'Saved to local offline queue. Will sync to AWS S3 when connected.',
+        object: syntheticObj
       };
     }
 
     const res = await fetch('/api/s3/upload', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ bucket, filename, mimeType, contentBase64 }),
+      headers: { 'Content-Type': 'application/json', ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}) },
+      body: JSON.stringify(payload)
     });
-
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.error || 'Upload to AWS S3 failed');
-    }
+    if (!res.ok) throw new Error('Upload failed');
     return await res.json();
   }
 
-  async deleteObject(bucket: string, key: string): Promise<any> {
-    const res = await fetch(`/api/s3/objects/${encodeURIComponent(key)}?bucket=${encodeURIComponent(bucket)}`, {
-      method: 'DELETE',
+  async deleteObject(id: string, bucket?: string, key?: string): Promise<boolean> {
+    const params = bucket && key ? `?${new URLSearchParams({ bucket, key }).toString()}` : '';
+    const res = await fetch(`/api/s3/objects/${id}${params}`, { method: 'DELETE', headers: this.token ? { Authorization: `Bearer ${this.token}` } : {} });
+    return res.ok;
+  }
+
+  async archiveObject(id: string, targetClass: string): Promise<any> {
+    const res = await fetch('/api/s3/archive', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, targetClass })
     });
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.error || 'Failed to delete S3 object');
-    }
     return await res.json();
   }
 
   // ------------------------------------
-  // INCIDENT ALERTS
+  // ALERTS & INCIDENTS (SNS / SLACK / EMAIL)
   // ------------------------------------
   async getAlerts(): Promise<{ alerts: AlertItem[] }> {
     try {
@@ -388,47 +294,97 @@ class ApiService {
     }
   }
 
-  async acknowledgeAlert(id: string): Promise<any> {
+  async getDeliveries(): Promise<{ deliveries: DeliveryEndpoint[]; analytics: DeliveryAnalytics }> {
+    try {
+      const response = await fetch('/api/deliveries');
+      if (!response.ok) throw new Error('Failed to fetch delivery endpoints');
+      const data = await response.json();
+      localStorage.setItem(STORAGE_KEYS.OFFLINE_CACHE + '_deliveries', JSON.stringify(data));
+      return data;
+    } catch {
+      const cached = localStorage.getItem(STORAGE_KEYS.OFFLINE_CACHE + '_deliveries');
+      if (cached) return JSON.parse(cached);
+      return { deliveries: [], analytics: { total: 0, delivered: 0, inTransit: 0, delayed: 0, averageProgress: 0, urgent: 0 } };
+    }
+  }
+
+  async updateDeliveryStatus(id: string, status: DeliveryStatus, progress?: number): Promise<DeliveryEndpoint> {
+    if (!this.isOnline) {
+      this.enqueueOfflineItem({ id: `queue-${Date.now()}`, action: 'delivery_status', payload: { id, status, progress }, timestamp: new Date().toISOString(), status: 'pending' });
+      const cached = await this.getDeliveries();
+      const delivery = cached.deliveries.find(item => item.id === id);
+      if (!delivery) throw new Error('Delivery endpoint was not found');
+      return { ...delivery, status, progress: progress ?? delivery.progress, urgent: status === 'delayed', updatedAt: new Date().toISOString() };
+    }
+    const response = await fetch(`/api/deliveries/${encodeURIComponent(id)}/status`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}) },
+      body: JSON.stringify({ status, progress }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Unable to update delivery status');
+    return data.delivery;
+  }
+
+  async acknowledgeAlert(id: string): Promise<boolean> {
+    if (!this.isOnline) {
+      this.enqueueOfflineItem({
+        id: `queue-${Date.now()}`,
+        action: 'alert_ack',
+        payload: { id },
+        timestamp: new Date().toISOString(),
+        status: 'pending'
+      });
+      return true;
+    }
     const res = await fetch('/api/alerts/acknowledge', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id }),
+      body: JSON.stringify({ id })
     });
-    return await res.json();
+    return res.ok;
   }
 
-  async resolveAlert(id: string): Promise<any> {
+  async resolveAlert(id: string): Promise<boolean> {
     const res = await fetch('/api/alerts/resolve', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id }),
+      body: JSON.stringify({ id })
     });
-    return await res.json();
+    return res.ok;
   }
 
   async dispatchIncidentAlert(payload: {
     title: string;
-    severity: string;
+    severity: 'critical' | 'warning' | 'info';
     description: string;
-    channels: string[];
-    topicArn?: string;
+    channels: ('slack' | 'sns' | 'email')[];
   }): Promise<any> {
     const res = await fetch('/api/alerts/dispatch', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(payload)
     });
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.error || 'Failed to dispatch alert');
-    }
     return await res.json();
   }
 
   // ------------------------------------
-  // OFFLINE QUEUE ENGINE
+  // DEVOPS & CI/CD PIPELINE
   // ------------------------------------
-  private getQueue(): OfflineQueueItem[] {
+  async getDevopsSummary(): Promise<any> {
+    try {
+      const res = await fetch('/api/devops/summary');
+      if (!res.ok) throw new Error('Failed to fetch devops data');
+      return await res.json();
+    } catch {
+      return null;
+    }
+  }
+
+  // ------------------------------------
+  // OFFLINE QUEUE & SYNC ENGINE
+  // ------------------------------------
+  public getOfflineQueue(): OfflineQueueItem[] {
     if (typeof window === 'undefined') return [];
     try {
       const stored = localStorage.getItem(STORAGE_KEYS.OFFLINE_QUEUE);
@@ -438,54 +394,69 @@ class ApiService {
     }
   }
 
-  private saveQueue(queue: OfflineQueueItem[]) {
-    if (typeof window === 'undefined') return;
+  public enqueueOfflineItem(item: OfflineQueueItem) {
+    const queue = this.getOfflineQueue();
+    queue.push(item);
     localStorage.setItem(STORAGE_KEYS.OFFLINE_QUEUE, JSON.stringify(queue));
-    this.queueChangeListeners.forEach(cb => cb(queue));
+    this.notifyQueueListeners();
   }
 
-  public subscribeQueue(callback: (queue: OfflineQueueItem[]) => void): () => void {
+  public subscribeQueue(callback: (queue: OfflineQueueItem[]) => void) {
     this.queueChangeListeners.push(callback);
-    callback(this.getQueue());
+    callback(this.getOfflineQueue());
     return () => {
       this.queueChangeListeners = this.queueChangeListeners.filter(cb => cb !== callback);
     };
   }
 
-  public enqueueMutation(item: OfflineQueueItem) {
-    const queue = this.getQueue();
-    queue.push(item);
-    this.saveQueue(queue);
+  private notifyQueueListeners() {
+    const q = this.getOfflineQueue();
+    this.queueChangeListeners.forEach(cb => cb(q));
   }
 
-  public async flushOfflineQueue(): Promise<{ processed: number }> {
-    const queue = this.getQueue();
-    if (queue.length === 0) return { processed: 0 };
+  public async flushOfflineQueue(): Promise<{ synced: number; failed: number }> {
+    const queue = this.getOfflineQueue();
+    if (queue.length === 0) return { synced: 0, failed: 0 };
 
-    let processed = 0;
-    const remaining: OfflineQueueItem[] = [];
+    let synced = 0;
+    let failed = 0;
+    const remainingQueue: OfflineQueueItem[] = [];
 
     for (const item of queue) {
       try {
         if (item.action === 's3_upload') {
-          await this.uploadObject(
-            item.payload.bucket,
-            item.payload.filename,
-            item.payload.mimeType,
-            item.payload.contentBase64
-          );
-          processed++;
+          await fetch('/api/s3/upload', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(item.payload)
+          });
+          synced++;
         } else if (item.action === 'alert_ack') {
-          await this.acknowledgeAlert(item.payload.id);
-          processed++;
+          await fetch('/api/alerts/acknowledge', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(item.payload)
+          });
+          synced++;
+        } else if (item.action === 'delivery_status') {
+          const response = await fetch(`/api/deliveries/${encodeURIComponent(item.payload.id)}/status`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json', ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}) },
+            body: JSON.stringify({ status: item.payload.status, progress: item.payload.progress }),
+          });
+          if (!response.ok) throw new Error('Delivery status sync failed');
+          synced++;
         }
-      } catch {
-        remaining.push(item);
+      } catch (err) {
+        console.error('Failed to sync offline item', item, err);
+        remainingQueue.push(item);
+        failed++;
       }
     }
 
-    this.saveQueue(remaining);
-    return { processed };
+    localStorage.setItem(STORAGE_KEYS.OFFLINE_QUEUE, JSON.stringify(remainingQueue));
+    this.notifyQueueListeners();
+    return { synced, failed };
   }
 }
 
