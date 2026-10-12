@@ -58,8 +58,9 @@ export const PrometheusGrafana: React.FC<PrometheusGrafanaProps> = ({
     setTimeout(() => {
       const now = Math.floor(Date.now() / 1000);
       const points = [];
+      const baseVal = metrics?.cpuUsagePercent ?? 0;
       for (let i = 10; i >= 0; i--) {
-        points.push([now - i * 15, (45 + Math.sin(i * 0.8) * 15).toFixed(2)]);
+        points.push([now - i * 15, baseVal.toFixed(2)]);
       }
 
       setQueryResult({
@@ -70,8 +71,8 @@ export const PrometheusGrafana: React.FC<PrometheusGrafanaProps> = ({
             {
               metric: {
                 __name__: promQuery.split('{')[0] || 'shogun_metric',
-                cluster: 'shogun-prod-kuber-x-us-east',
-                instance: 'worker-node-01:9090',
+                cluster: 'aws-management-account',
+                instance: 'aws-node-exporter:9090',
                 job: 'kubernetes-nodes'
               },
               values: points

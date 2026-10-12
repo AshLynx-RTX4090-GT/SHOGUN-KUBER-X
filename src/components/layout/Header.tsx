@@ -9,10 +9,11 @@ import {
   ShieldCheck, 
   CheckCircle, 
   AlertTriangle,
-  ChevronDown
+  ChevronDown,
+  Cloud,
+  Globe
 } from 'lucide-react';
-import { ContextPulse } from './ContextPulse';
-import { User, UserRole, AlertItem, OfflineQueueItem } from '../../types';
+import { User, UserRole, AlertItem, OfflineQueueItem, AwsAccountStatus, AwsDiscoveryData } from '../../types';
 
 interface HeaderProps {
   currentUser: User | null;
@@ -24,7 +25,22 @@ interface HeaderProps {
   onManualSync: () => void;
   activeAlerts: AlertItem[];
   currentTabTitle: string;
+  awsStatus?: AwsAccountStatus | null;
+  discovery?: AwsDiscoveryData | null;
+  onNavigateTab?: (tab: string) => void;
+  onSwitchRegion?: (region: string) => void;
 }
+
+const POPULAR_REGIONS = [
+  { id: 'us-east-1', name: 'US East (N. Virginia)' },
+  { id: 'us-east-2', name: 'US East (Ohio)' },
+  { id: 'us-west-2', name: 'US West (Oregon)' },
+  { id: 'ap-south-1', name: 'Asia Pacific (Mumbai)' },
+  { id: 'ap-southeast-1', name: 'Asia Pacific (Singapore)' },
+  { id: 'ap-northeast-1', name: 'Asia Pacific (Tokyo)' },
+  { id: 'eu-west-1', name: 'Europe (Ireland)' },
+  { id: 'eu-central-1', name: 'Europe (Frankfurt)' },
+];
 
 export const Header: React.FC<HeaderProps> = ({
   currentUser,
@@ -36,17 +52,29 @@ export const Header: React.FC<HeaderProps> = ({
   onManualSync,
   activeAlerts,
   currentTabTitle,
+  awsStatus,
+  discovery,
+  onNavigateTab,
+  onSwitchRegion,
 }) => {
   const [isAlertsOpen, setIsAlertsOpen] = useState(false);
   const [isRoleMenuOpen, setIsRoleMenuOpen] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
 
+  const isAwsConnected = awsStatus?.connected === true;
   const unreadAlertCount = activeAlerts.filter(a => a.status === 'active').length;
 
   const handleSyncClick = async () => {
     setIsSyncing(true);
     await onManualSync();
     setTimeout(() => setIsSyncing(false), 600);
+  };
+
+  const handleRegionChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const newReg = e.target.value;
+    if (onSwitchRegion) {
+      onSwitchRegion(newReg);
+    }
   };
 
   return (
@@ -57,38 +85,53 @@ export const Header: React.FC<HeaderProps> = ({
     } backdrop-blur-md sticky top-0 z-40`}>
       {/* Zone 1: Single Text Element Brand Wordmark */}
       <div className="flex items-center gap-3">
-        <a href="#overview" className="flex items-center gap-2 group">
+        <button 
+          onClick={() => onNavigateTab && onNavigateTab('overview')}
+          className="flex items-center gap-2 group cursor-pointer text-left"
+        >
           <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-cyan-600 to-sky-400 flex items-center justify-center text-white shadow-sm font-mono font-bold text-sm tracking-wider">
             KX
           </div>
-          <span className="font-extrabold text-lg tracking-tight font-sans">
+          <span className="font-extrabold text-lg tracking-tight font-sans text-slate-100">
             Shogun KUBER X
           </span>
-        </a>
-        <span className="hidden sm:inline text-xs text-slate-400 font-mono" aria-hidden="true">/</span>
-        <span className="hidden sm:inline text-xs font-medium text-slate-400">
+        </button>
+        <span className="hidden sm:inline text-xs text-slate-500 font-mono" aria-hidden="true">/</span>
+        <span className="hidden sm:inline text-xs font-medium text-slate-400 truncate max-w-[150px] lg:max-w-none">
           {currentTabTitle}
         </span>
       </div>
 
-      {/* Zone 2: System Telemetry & Cluster Context (Clean unboxed text, no pills) */}
+      {/* Zone 2: System Telemetry Status */}
       <div className="hidden lg:flex items-center gap-3 text-xs text-slate-400 font-mono">
-        <span className="flex items-center gap-1.5">
-          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-          <span>us-east-1 prod</span>
-        </span>
-        <span aria-hidden="true">·</span>
-        <span>EKS v1.31.2</span>
-        <span aria-hidden="true">·</span>
-        <span className="tabular-nums">118/124 Pods Nominal</span>
-        <span aria-hidden="true">·</span>
-        <span className="tabular-nums">AWS S3 809 MB</span>
-        <span aria-hidden="true">·</span>
-        <ContextPulse />
+        <div className="flex items-center gap-2">
+          {/* Region Selector */}
+          <div className="flex items-center gap-1 bg-slate-800/80 px-2 py-0.5 rounded border border-slate-700">
+            <Globe className="w-3 h-3 text-cyan-400" />
+            <select
+              value={awsStatus?.region || 'us-east-1'}
+              onChange={handleRegionChange}
+              className="bg-transparent text-[11px] text-slate-200 focus:outline-none cursor-pointer"
+              title="Switch Active Region"
+            >
+              {POPULAR_REGIONS.map(r => (
+                <option key={r.id} value={r.id} className="bg-slate-900 text-slate-100">
+                  {r.id} ({r.name.split('(')[1]?.replace(')', '') || r.id})
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <span aria-hidden="true" className="text-slate-600">·</span>
+          <span className="tabular-nums text-slate-300">{discovery?.summary?.s3BucketCount ?? 0} S3 Buckets</span>
+          <span aria-hidden="true" className="text-slate-600">·</span>
+          <span className="tabular-nums text-slate-300">{(discovery?.summary?.ec2InstanceCount ?? 0) + (discovery?.summary?.eksClusterCount ?? 0)} Compute Nodes</span>
+        </div>
       </div>
 
       {/* Zone 3: Primary Action Controls */}
       <div className="flex items-center gap-2 sm:gap-3">
+
         {/* Offline / Online Sync State */}
         <div className="flex items-center gap-1.5 text-xs">
           {isOnline ? (
@@ -104,19 +147,9 @@ export const Header: React.FC<HeaderProps> = ({
           )}
 
           {offlineQueue.length > 0 && (
-            <button
-              onClick={handleSyncClick}
-              disabled={isSyncing}
-              className={`flex items-center gap-1 px-2.5 py-1 text-xs rounded transition-colors ${
-                isDarkMode 
-                  ? 'bg-amber-950/60 text-amber-300 border border-amber-800/60 hover:bg-amber-900/60' 
-                  : 'bg-amber-50 text-amber-800 border border-amber-200 hover:bg-amber-100'
-              }`}
-              title="Click to sync offline changes"
-            >
-              <RefreshCw className={`w-3 h-3 ${isSyncing ? 'animate-spin' : ''}`} />
-              <span className="tabular-nums font-mono">{offlineQueue.length} pending</span>
-            </button>
+            <span className="bg-amber-950/60 text-amber-300 border border-amber-800/60 px-2 py-0.5 rounded text-[11px] font-mono">
+              {offlineQueue.length} pending
+            </span>
           )}
         </div>
 
@@ -125,7 +158,7 @@ export const Header: React.FC<HeaderProps> = ({
           <button
             onClick={() => setIsAlertsOpen(!isAlertsOpen)}
             aria-label="Alerts"
-            className={`relative p-2 rounded-lg transition-colors ${
+            className={`relative p-2 rounded-lg transition-colors cursor-pointer ${
               isDarkMode 
                 ? 'hover:bg-slate-800 text-slate-300' 
                 : 'hover:bg-slate-100 text-slate-600'
@@ -192,7 +225,7 @@ export const Header: React.FC<HeaderProps> = ({
         <button
           onClick={onToggleDarkMode}
           aria-label={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
-          className={`p-2 rounded-lg transition-colors ${
+          className={`p-2 rounded-lg transition-colors cursor-pointer ${
             isDarkMode 
               ? 'hover:bg-slate-800 text-amber-400' 
               : 'hover:bg-slate-100 text-slate-600'
@@ -205,7 +238,7 @@ export const Header: React.FC<HeaderProps> = ({
         <div className="relative">
           <button
             onClick={() => setIsRoleMenuOpen(!isRoleMenuOpen)}
-            className={`flex items-center gap-2 p-1 sm:px-2.5 sm:py-1.5 rounded-lg border transition-colors ${
+            className={`flex items-center gap-2 p-1 sm:px-2.5 sm:py-1.5 rounded-lg border transition-colors cursor-pointer ${
               isDarkMode 
                 ? 'border-slate-800 bg-slate-900 hover:bg-slate-800/80 text-slate-200' 
                 : 'border-slate-200 bg-white hover:bg-slate-50 text-slate-800'
@@ -258,7 +291,7 @@ export const Header: React.FC<HeaderProps> = ({
                       onRoleChange(r.id);
                       setIsRoleMenuOpen(false);
                     }}
-                    className={`w-full text-left px-2.5 py-1.5 rounded text-xs flex items-center justify-between ${
+                    className={`w-full text-left px-2.5 py-1.5 rounded text-xs flex items-center justify-between cursor-pointer ${
                       currentUser?.role === r.id
                         ? isDarkMode ? 'bg-cyan-950/60 text-cyan-300 font-semibold' : 'bg-cyan-50 text-cyan-800 font-semibold'
                         : isDarkMode ? 'hover:bg-slate-800 text-slate-300' : 'hover:bg-slate-100 text-slate-700'

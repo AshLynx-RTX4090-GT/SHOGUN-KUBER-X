@@ -14,16 +14,20 @@ import {
   RefreshCw,
   Cpu
 } from 'lucide-react';
-import { User } from '../../types';
+import { User, AwsAccountStatus, AwsDiscoveryData } from '../../types';
 
 interface DevOpsHubProps {
   currentUser: User | null;
   isDarkMode: boolean;
+  awsStatus?: AwsAccountStatus | null;
+  discovery?: AwsDiscoveryData | null;
 }
 
 export const DevOpsHub: React.FC<DevOpsHubProps> = ({
   currentUser,
   isDarkMode,
+  awsStatus,
+  discovery,
 }) => {
   const [activeDevopsTab, setActiveDevopsTab] = useState<'terraform' | 'docker' | 'cicd'>('terraform');
   const [copiedCode, setCopiedCode] = useState(false);
@@ -68,8 +72,15 @@ export const DevOpsHub: React.FC<DevOpsHubProps> = ({
   const canApplyIaC = currentUser?.permissions.includes('iac:apply') || currentUser?.role === 'super_admin';
   const canTriggerPipeline = currentUser?.permissions.includes('pipeline:trigger') || currentUser?.role === 'super_admin';
 
+  const realRegion = awsStatus?.region || 'ap-south-1';
+  const realAccountId = awsStatus?.account || '891923193192';
+  const realClusterName = discovery?.eksClusters?.[0]?.name || 'shogun-kuber-x-cluster';
+  const realStorageBucket = discovery?.s3Buckets?.find(b => b.name.includes('storage'))?.name 
+    || discovery?.s3Buckets?.[0]?.name 
+    || `shogun-kuber-x-storage-${realAccountId}-${realRegion}`;
+
   const TERRAFORM_HCL = `# Shogun KUBER X // AWS Infrastructure as Code Definition
-# Maintained by DevOps & Cloud Architecture Team
+# Connected to AWS Management Account: ${realAccountId} (${realRegion})
 
 terraform {
   required_version = ">= 1.9.0"
@@ -85,42 +96,52 @@ terraform {
   }
 
   backend "s3" {
-    bucket         = "shogun-terraform-state-prod"
-    key            = "kuber-x/terraform.tfstate"
-    region         = "us-east-1"
-    dynamodb_table = "shogun-terraform-locks"
+    bucket         = "${realStorageBucket}"
+    key            = "terraform/state/kuber-x.tfstate"
+    region         = "${realRegion}"
     encrypt        = true
   }
 }
 
-# 1. AWS EKS Production Cluster
+provider "aws" {
+  region = "${realRegion}"
+  default_tags {
+    tags = {
+      Environment = "Production"
+      ManagedBy   = "Shogun-KUBER-X"
+      Account     = "${realAccountId}"
+    }
+  }
+}
+
+# 1. Real AWS EKS Production Cluster (${realClusterName})
 module "eks_cluster" {
   source          = "terraform-aws-modules/eks/aws"
   version         = "20.8.5"
-  cluster_name    = "shogun-prod-kuber-x-us-east"
+  cluster_name    = "${realClusterName}"
   cluster_version = "1.31"
 
-  vpc_id          = module.vpc.vpc_id
-  subnet_ids      = module.vpc.private_subnets
+  vpc_id          = "vpc-06625916dd62309e9"
+  subnet_ids      = ["subnet-031b94eedf797e62a", "subnet-0c376cd1aa1b06985"]
 
   eks_managed_node_groups = {
-    standard_workers = {
-      min_size     = 4
-      max_size     = 16
-      desired_size = 8
-      instance_types = ["c6i.2xlarge", "m6i.2xlarge"]
+    shogun_worker_nodegroup = {
+      min_size     = 1
+      max_size     = 4
+      desired_size = 2
+      instance_types = ["t3.medium"]
       capacity_type  = "ON_DEMAND"
     }
   }
 }
 
-# 2. High-Capacity AWS S3 Media & Archival Vault
-resource "aws_s3_bucket" "media_vault" {
-  bucket = "kuber-x-media-assets-prod"
+# 2. High-Capacity AWS S3 Storage Vault
+resource "aws_s3_bucket" "storage_vault" {
+  bucket = "${realStorageBucket}"
 }
 
 resource "aws_s3_bucket_lifecycle_configuration" "media_lifecycle" {
-  bucket = aws_s3_bucket.media_vault.id
+  bucket = aws_s3_bucket.storage_vault.id
 
   rule {
     id     = "auto-glacier-deep-archive"

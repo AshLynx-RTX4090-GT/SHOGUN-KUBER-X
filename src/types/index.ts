@@ -9,6 +9,87 @@ export interface User {
   permissions: string[];
 }
 
+export interface AwsAccountStatus {
+  connected: boolean;
+  account?: string;
+  arn?: string;
+  userId?: string;
+  region: string;
+  hasSessionToken?: boolean;
+  configuredVia?: string;
+  error?: string;
+  lastVerified?: string;
+  message?: string;
+}
+
+export interface AwsDiscoveredCluster {
+  name: string;
+  arn?: string;
+  status?: string;
+  version?: string;
+  endpoint?: string;
+  createdAt?: string;
+  roleArn?: string;
+  nodegroups: string[];
+}
+
+export interface AwsDiscoveredInstance {
+  instanceId: string;
+  name: string;
+  instanceType?: string;
+  state?: string;
+  privateIp?: string;
+  publicIp?: string;
+  launchTime?: string;
+  subnetId?: string;
+  vpcId?: string;
+}
+
+export interface AwsDiscoveredS3Bucket {
+  name: string;
+  creationDate?: string;
+  region: string;
+}
+
+export interface AwsDiscoveredSnsTopic {
+  arn: string;
+  name: string;
+}
+
+export interface AwsDiscoveredAlarm {
+  name: string;
+  arn?: string;
+  state: string;
+  stateReason?: string;
+  metricName?: string;
+  namespace?: string;
+  threshold?: number;
+  comparison?: string;
+}
+
+export interface AwsDiscoveryData {
+  connected: boolean;
+  account?: string;
+  arn?: string;
+  userId?: string;
+  region: string;
+  lastSyncedAt?: string;
+  summary?: {
+    s3BucketCount: number;
+    eksClusterCount: number;
+    ec2InstanceCount: number;
+    snsTopicCount: number;
+    cloudWatchAlarmCount: number;
+  };
+  s3Buckets: AwsDiscoveredS3Bucket[];
+  eksClusters: AwsDiscoveredCluster[];
+  ec2Instances: AwsDiscoveredInstance[];
+  snsTopics: AwsDiscoveredSnsTopic[];
+  cloudWatchAlarms: AwsDiscoveredAlarm[];
+  message?: string;
+  error?: string;
+}
+
 export interface ClusterInfo {
   name: string;
   kubernetesVersion: string;
@@ -51,7 +132,7 @@ export interface MetricHistoryPoint {
 export interface S3Bucket {
   name: string;
   region: string;
-  created: string;
+  created?: string;
   objectCount: number;
   sizeBytes: number;
   versioning: boolean;
@@ -66,9 +147,9 @@ export interface S3MediaObject {
   filename: string;
   size: number;
   mimeType: string;
-  type: 'image' | 'video' | 'audio' | 'document' | 'config';
+  type: 'image' | 'video' | 'document' | 'config';
   url: string;
-  storageClass: 'STANDARD' | 'GLACIER' | 'DEEP_ARCHIVE' | 'INTELLIGENT_TIERING';
+  storageClass: string;
   lastModified: string;
   uploadedBy: string;
   tags: string[];
@@ -100,7 +181,8 @@ export interface AlertItem {
 
 export interface OfflineQueueItem {
   id: string;
-  action: 's3_upload' | 'alert_ack' | 'delivery_status' | 'pod_restart' | 'terraform_apply';
+  action: 's3_upload' | 'alert_ack' | 'pod_restart' | 'terraform_apply';
+  type?: string;
   payload: any;
   timestamp: string;
   status: 'pending' | 'synced' | 'failed';
@@ -114,28 +196,144 @@ export interface WidgetConfig {
   description: string;
 }
 
-export type DeliveryStatus = 'pending' | 'in_transit' | 'delivered' | 'delayed';
-
-export interface DeliveryEndpoint {
-  id: string;
-  trackingCode: string;
-  customerName: string;
-  city: string;
-  region: string;
-  latitude: number;
-  longitude: number;
-  status: DeliveryStatus;
-  progress: number;
-  eta: string;
-  updatedAt: string;
-  urgent: boolean;
+export interface ClusterNodeInfo {
+  instanceId: string;
+  name: string;
+  instanceType: string;
+  state: string;
+  privateIp?: string;
+  publicIp?: string;
+  subnetId?: string;
+  vpcId?: string;
+  launchTime?: string;
 }
 
-export interface DeliveryAnalytics {
-  total: number;
-  delivered: number;
-  inTransit: number;
-  delayed: number;
-  averageProgress: number;
-  urgent: number;
+export interface ClusterPodInfo {
+  name: string;
+  namespace: string;
+  status: string;
+  restarts: number;
+  node: string;
+  age: string;
+}
+
+export interface ClusterStatusResponse {
+  connected: boolean;
+  cluster: {
+    name: string;
+    status: string;
+    health: 'Active' | 'Degraded';
+    kubernetesVersion: string;
+    arn: string;
+    endpoint: string;
+    roleArn: string;
+    createdAt: string;
+    region: string;
+    nodegroups: string[];
+  };
+  nodes: {
+    total: number;
+    active: number;
+    items: ClusterNodeInfo[];
+  };
+  pods: {
+    total: number;
+    running: number;
+    pending: number;
+    failed: number;
+    items: ClusterPodInfo[];
+  };
+  timestamp: string;
+}
+
+export interface MetricDataPoint {
+  timestamp: string;
+  label: string;
+  cpuUtilization: number;
+  memoryUtilization: number;
+  networkThroughputMBps: number;
+}
+
+export interface TelemetryMetricsResponse {
+  period: string;
+  resolutionSeconds: number;
+  nodegroup: string;
+  nodeCount: number;
+  current: {
+    cpuUtilizationPercent: number;
+    memoryUtilizationPercent: number;
+    networkThroughputMBps: number;
+  };
+  summary: {
+    averageCpuPercent: number;
+    averageMemoryPercent: number;
+    peakCpuPercent: number;
+  };
+  dataPoints: MetricDataPoint[];
+  timestamp: string;
+}
+
+export interface PipelineArtifact {
+  key: string;
+  filename: string;
+  bucket: string;
+  sizeBytes: number;
+  formattedSize: string;
+  lastModified: string;
+  eTag: string;
+  storageClass: string;
+  category: 'pipeline_report' | 'run_artifact';
+  downloadUrl: string;
+  s3Uri: string;
+}
+
+export interface StorageArtifactsResponse {
+  bucket: string;
+  region: string;
+  totalCount: number;
+  totalSizeBytes: number;
+  artifacts: PipelineArtifact[];
+  timestamp: string;
+}
+
+export interface PipelineStage {
+  name: string;
+  status: 'SUCCESS' | 'RUNNING' | 'PENDING' | 'FAILED';
+  duration: string;
+}
+
+export interface LiveTelemetryStreamData {
+  timestamp: string;
+  connected: boolean;
+  region: string;
+  cluster: {
+    name: string;
+    health: string;
+    status: string;
+    kubernetesVersion: string;
+    nodesTotal: number;
+    nodesReady: number;
+    podsTotal: number;
+    podsRunning: number;
+  };
+  metrics: {
+    cpuUsagePercent: number;
+    memoryUsagePercent: number;
+    networkThroughputMBps: number;
+    requestsPerSecond: number;
+    errorRatePercent: number;
+    latencies: { p50: number; p95: number; p99: number };
+  };
+  pipeline: {
+    id: string;
+    name: string;
+    status: string;
+    duration: string;
+    completedAt: string;
+    stages: PipelineStage[];
+  };
+  storage: {
+    bucket: string;
+    artifactsCount: number;
+  };
 }
