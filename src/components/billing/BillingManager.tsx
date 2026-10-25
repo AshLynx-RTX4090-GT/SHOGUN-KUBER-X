@@ -119,7 +119,7 @@ export const BillingManager: React.FC = () => {
         key: order.keyId,
         amount: order.amount,
         currency: order.currency,
-        name: 'Shogun KUBER X',
+        name: 'CloudDeployX',
         description: `${activePlan.name} ${purchaseMode === 'subscription' ? 'subscription' : 'purchase'}`,
         order_id: order.orderId,
         prefill: { name: 'Ashirbad Biswal', email: 'ashirbad.admin@shogun-kuber.io' },

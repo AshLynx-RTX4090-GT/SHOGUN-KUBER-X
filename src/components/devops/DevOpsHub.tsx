@@ -68,7 +68,7 @@ export const DevOpsHub: React.FC<DevOpsHubProps> = ({
   const canApplyIaC = currentUser?.permissions.includes('iac:apply') || currentUser?.role === 'super_admin';
   const canTriggerPipeline = currentUser?.permissions.includes('pipeline:trigger') || currentUser?.role === 'super_admin';
 
-  const TERRAFORM_HCL = `# Shogun KUBER X // AWS Infrastructure as Code Definition
+  const TERRAFORM_HCL = `# CloudDeployX // AWS Infrastructure as Code Definition
 # Maintained by DevOps & Cloud Architecture Team
 
 terraform {
@@ -148,7 +148,7 @@ resource "aws_sns_topic" "incident_alerts" {
     {
       name: 'Dockerfile.api-gateway',
       role: 'Express & Vite API Core Server',
-      code: `# Multi-stage High-Performance Container for Shogun KUBER X
+      code: `# Multi-stage High-Performance Container for CloudDeployX
 FROM node:22-alpine AS builder
 WORKDIR /app
 
@@ -245,7 +245,7 @@ ENTRYPOINT ["python", "transcoder.py"]`
       const newRun = {
         id: `run-${Math.floor(Math.random() * 900) + 8900}`,
         commitSha: Math.random().toString(16).substring(2, 9),
-        message: 'ci: manual workflow trigger via Shogun KUBER X DevOps console',
+        message: 'ci: manual workflow trigger via CloudDeployX DevOps console',
         author: currentUser?.username || 'Ashirbad Biswal',
         duration: '1m 38s',
         status: 'passed',

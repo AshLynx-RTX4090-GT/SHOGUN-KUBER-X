@@ -59,10 +59,10 @@ export const Header: React.FC<HeaderProps> = ({
       <div className="flex items-center gap-3">
         <a href="#overview" className="flex items-center gap-2 group">
           <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-cyan-600 to-sky-400 flex items-center justify-center text-white shadow-sm font-mono font-bold text-sm tracking-wider">
-            KX
+            CD
           </div>
           <span className="font-extrabold text-lg tracking-tight font-sans">
-            Shogun KUBER X
+            CloudDeployX
           </span>
         </a>
         <span className="hidden sm:inline text-xs text-slate-400 font-mono" aria-hidden="true">/</span>
