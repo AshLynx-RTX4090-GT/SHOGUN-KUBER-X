@@ -139,3 +139,41 @@ export interface DeliveryAnalytics {
   averageProgress: number;
   urgent: number;
 }
+
+export interface AwsConsoleConfig {
+  accountId: string;
+  region: string;
+  connected: boolean;
+  roleArn?: string;
+  regions: string[];
+  consoleUrls: {
+    home: string;
+    s3: string;
+    eks: string;
+    cloudwatch: string;
+    cloudformation: string;
+    iam: string;
+    sns: string;
+    ecr: string;
+  };
+}
+
+export interface K8sNode {
+  name: string;
+  status: 'Ready' | 'NotReady' | 'SchedulingDisabled';
+  role: string;
+  cpuAllocated: string;
+  memAllocated: string;
+  kubelet: string;
+  cordoned?: boolean;
+}
+
+export interface K8sDeployment {
+  name: string;
+  namespace: string;
+  replicas: number;
+  availableReplicas: number;
+  image: string;
+  status: string;
+  updatedAt: string;
+}

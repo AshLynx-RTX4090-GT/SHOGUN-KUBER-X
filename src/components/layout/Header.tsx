@@ -9,9 +9,10 @@ import {
   ShieldCheck, 
   CheckCircle, 
   AlertTriangle,
-  ChevronDown
+  ChevronDown,
+  ExternalLink,
+  Cloud
 } from 'lucide-react';
-import { ContextPulse } from './ContextPulse';
 import { User, UserRole, AlertItem, OfflineQueueItem } from '../../types';
 
 interface HeaderProps {
@@ -24,6 +25,8 @@ interface HeaderProps {
   onManualSync: () => void;
   activeAlerts: AlertItem[];
   currentTabTitle: string;
+  awsRegion?: string;
+  awsAccountId?: string;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -36,9 +39,12 @@ export const Header: React.FC<HeaderProps> = ({
   onManualSync,
   activeAlerts,
   currentTabTitle,
+  awsRegion = 'us-east-1',
+  awsAccountId = '956083908253',
 }) => {
   const [isAlertsOpen, setIsAlertsOpen] = useState(false);
   const [isRoleMenuOpen, setIsRoleMenuOpen] = useState(false);
+  const [isAwsConsoleOpen, setIsAwsConsoleOpen] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
 
   const unreadAlertCount = activeAlerts.filter(a => a.status === 'active').length;
@@ -48,6 +54,16 @@ export const Header: React.FC<HeaderProps> = ({
     await onManualSync();
     setTimeout(() => setIsSyncing(false), 600);
   };
+
+  const consoleLinks = [
+    { name: 'AWS Management Console', url: `https://${awsRegion}.console.aws.amazon.com/console/home?region=${awsRegion}`, desc: 'Main AWS Console Home' },
+    { name: 'Amazon S3 Console', url: `https://s3.console.aws.amazon.com/s3/home?region=${awsRegion}`, desc: 'Buckets, storage classes & lifecycle' },
+    { name: 'Amazon EKS Console', url: `https://${awsRegion}.console.aws.amazon.com/eks/home?region=${awsRegion}#/clusters`, desc: 'Clusters, nodes & workloads' },
+    { name: 'Amazon CloudWatch', url: `https://${awsRegion}.console.aws.amazon.com/cloudwatch/home?region=${awsRegion}`, desc: 'Metrics, alarms & logs' },
+    { name: 'AWS CloudFormation', url: `https://${awsRegion}.console.aws.amazon.com/cloudformation/home?region=${awsRegion}#/stacks`, desc: 'Infrastructure as Code stacks' },
+    { name: 'AWS IAM Console', url: 'https://us-east-1.console.aws.amazon.com/iamv2/home#/roles', desc: 'Roles, users & policies' },
+    { name: 'Amazon SNS Notifications', url: `https://${awsRegion}.console.aws.amazon.com/sns/v3/home?region=${awsRegion}#/topics`, desc: 'Incident dispatch topics' },
+  ];
 
   return (
     <header className={`h-16 px-4 md:px-6 flex items-center justify-between border-b transition-colors ${
@@ -71,24 +87,84 @@ export const Header: React.FC<HeaderProps> = ({
         </span>
       </div>
 
-      {/* Zone 2: System Telemetry & Cluster Context (Clean unboxed text, no pills) */}
+      {/* Zone 2: System Telemetry & Cluster Context */}
       <div className="hidden lg:flex items-center gap-3 text-xs text-slate-400 font-mono">
         <span className="flex items-center gap-1.5">
           <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-          <span>us-east-1 prod</span>
+          <span className="text-slate-200">{awsRegion}</span>
         </span>
         <span aria-hidden="true">·</span>
         <span>EKS v1.31.2</span>
         <span aria-hidden="true">·</span>
         <span className="tabular-nums">118/124 Pods Nominal</span>
         <span aria-hidden="true">·</span>
-        <span className="tabular-nums">AWS S3 809 MB</span>
+        <span className="tabular-nums">AWS S3 Connected</span>
         <span aria-hidden="true">·</span>
-        <ContextPulse />
+        <span className="text-amber-400/90 flex items-center gap-1">
+          <Cloud className="w-3.5 h-3.5" />
+          <span>Acc: {awsAccountId}</span>
+        </span>
       </div>
 
       {/* Zone 3: Primary Action Controls */}
       <div className="flex items-center gap-2 sm:gap-3">
+        {/* AWS Console Dropdown Button */}
+        <div className="relative">
+          <button
+            onClick={() => setIsAwsConsoleOpen(!isAwsConsoleOpen)}
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-medium transition-all ${
+              isDarkMode
+                ? 'bg-amber-950/40 border-amber-800/60 text-amber-300 hover:bg-amber-900/40'
+                : 'bg-amber-50 border-amber-300 text-amber-900 hover:bg-amber-100'
+            }`}
+            title="Open in your AWS Account Console"
+          >
+            <Cloud className="w-3.5 h-3.5 text-amber-400" />
+            <span className="hidden sm:inline font-mono">AWS Console</span>
+            <ChevronDown className="w-3 h-3 text-amber-400/80" />
+          </button>
+
+          {isAwsConsoleOpen && (
+            <div className={`absolute right-0 mt-2 w-72 rounded-lg shadow-2xl border p-2 z-50 ${
+              isDarkMode 
+                ? 'bg-slate-900 border-slate-800 text-slate-100' 
+                : 'bg-white border-slate-200 text-slate-900'
+            }`}>
+              <div className="px-2 py-1.5 border-b border-slate-700/50 mb-1 flex items-center justify-between">
+                <div>
+                  <span className="text-xs font-bold text-amber-400 flex items-center gap-1.5">
+                    <Cloud className="w-3.5 h-3.5" /> AWS Account Console
+                  </span>
+                  <div className="text-[10px] text-slate-400 font-mono mt-0.5">
+                    ID: {awsAccountId} · {awsRegion}
+                  </div>
+                </div>
+                <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-mono">Live</span>
+              </div>
+              <div className="py-1 space-y-0.5">
+                {consoleLinks.map(link => (
+                  <a
+                    key={link.name}
+                    href={link.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={() => setIsAwsConsoleOpen(false)}
+                    className={`block px-2.5 py-2 rounded text-xs transition-colors group ${
+                      isDarkMode ? 'hover:bg-slate-800 text-slate-200' : 'hover:bg-slate-100 text-slate-800'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between font-semibold group-hover:text-amber-400">
+                      <span>{link.name}</span>
+                      <ExternalLink className="w-3 h-3 opacity-60 group-hover:opacity-100" />
+                    </div>
+                    <div className="text-[10px] text-slate-400 mt-0.5">{link.desc}</div>
+                  </a>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
         {/* Offline / Online Sync State */}
         <div className="flex items-center gap-1.5 text-xs">
           {isOnline ? (

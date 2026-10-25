@@ -1,4 +1,4 @@
-import { AlertItem, DeliveryAnalytics, DeliveryEndpoint, DeliveryStatus, MetricHistoryPoint, OfflineQueueItem, S3Bucket, S3MediaObject, SystemMetrics, User } from '../types';
+import { AlertItem, AwsConsoleConfig, ClusterInfo, DeliveryAnalytics, DeliveryEndpoint, DeliveryStatus, K8sDeployment, K8sNode, MetricHistoryPoint, OfflineQueueItem, PodItem, S3Bucket, S3MediaObject, SystemMetrics, User } from '../types';
 
 const STORAGE_KEYS = {
   TOKEN: 'shogun_jwt_token',
@@ -145,6 +145,44 @@ class ApiService {
   }
 
   // ------------------------------------
+  // AWS CONSOLE CONFIGURATION & STATUS
+  // ------------------------------------
+  async getAwsConfig(): Promise<AwsConsoleConfig> {
+    try {
+      const res = await fetch('/api/aws/config');
+      if (!res.ok) throw new Error('Failed to load AWS configuration');
+      return await res.json();
+    } catch {
+      return {
+        accountId: '956083908253',
+        region: 'us-east-1',
+        connected: true,
+        regions: ['us-east-1', 'us-west-2', 'eu-central-1', 'ap-south-1', 'ap-southeast-1', 'eu-west-1'],
+        consoleUrls: {
+          home: 'https://us-east-1.console.aws.amazon.com/console/home?region=us-east-1',
+          s3: 'https://s3.console.aws.amazon.com/s3/home?region=us-east-1',
+          eks: 'https://us-east-1.console.aws.amazon.com/eks/home?region=us-east-1#/clusters',
+          cloudwatch: 'https://us-east-1.console.aws.amazon.com/cloudwatch/home?region=us-east-1',
+          cloudformation: 'https://us-east-1.console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks',
+          iam: 'https://us-east-1.console.aws.amazon.com/iamv2/home#/roles',
+          sns: 'https://us-east-1.console.aws.amazon.com/sns/v3/home?region=us-east-1#/topics',
+          ecr: 'https://us-east-1.console.aws.amazon.com/ecr/repositories?region=us-east-1',
+        }
+      };
+    }
+  }
+
+  async updateAwsConfig(payload: { accountId?: string; region?: string }): Promise<AwsConsoleConfig> {
+    const res = await fetch('/api/aws/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}) },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) throw new Error('Failed to update AWS config');
+    return await res.json();
+  }
+
+  // ------------------------------------
   // AWS S3 STORAGE
   // ------------------------------------
   async getAwsStatus(): Promise<any> {
@@ -272,6 +310,25 @@ class ApiService {
     return res.ok;
   }
 
+  async createBucket(name: string, region?: string): Promise<{ success: boolean; bucket: S3Bucket; message: string }> {
+    const res = await fetch('/api/s3/buckets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}) },
+      body: JSON.stringify({ name, region })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to create S3 bucket');
+    return data;
+  }
+
+  async runS3Lifecycle(): Promise<{ success: boolean; message: string; transitionedCount: number }> {
+    const res = await fetch('/api/s3/lifecycle/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}) }
+    });
+    return await res.json();
+  }
+
   async archiveObject(id: string, targetClass: string): Promise<any> {
     const res = await fetch('/api/s3/archive', {
       method: 'POST',
@@ -279,6 +336,115 @@ class ApiService {
       body: JSON.stringify({ id, targetClass })
     });
     return await res.json();
+  }
+
+  // ------------------------------------
+  // KUBERNETES CLUSTER & WORKLOADS
+  // ------------------------------------
+  async getK8sCluster(): Promise<ClusterInfo & { clusterArn: string; region: string }> {
+    try {
+      const res = await fetch('/api/k8s/cluster');
+      if (!res.ok) throw new Error('Failed to fetch cluster info');
+      return await res.json();
+    } catch {
+      return {
+        name: 'shogun-prod-kuber-x-us-east',
+        kubernetesVersion: 'v1.31.2-eks.1',
+        clusterArn: 'arn:aws:eks:us-east-1:956083908253:cluster/shogun-prod-kuber-x-us-east',
+        region: 'us-east-1',
+        nodesTotal: 8,
+        nodesReady: 8,
+        podsTotal: 12,
+        podsRunning: 11,
+        podsPending: 1,
+        podsFailed: 0,
+        namespaces: ['default', 'production-apps', 'telemetry-kuber', 'kube-system']
+      };
+    }
+  }
+
+  async getK8sNodes(): Promise<{ nodes: K8sNode[] }> {
+    try {
+      const res = await fetch('/api/k8s/nodes');
+      if (!res.ok) throw new Error('Failed to fetch nodes');
+      return await res.json();
+    } catch {
+      return { nodes: [] };
+    }
+  }
+
+  async toggleCordonNode(name: string): Promise<{ success: boolean; message: string; node: K8sNode }> {
+    const res = await fetch(`/api/k8s/nodes/${encodeURIComponent(name)}/cordon`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}) }
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to toggle cordon status');
+    return data;
+  }
+
+  async getK8sPods(namespace?: string, status?: string, search?: string): Promise<{ total: number; pods: PodItem[] }> {
+    try {
+      const params = new URLSearchParams();
+      if (namespace && namespace !== 'all') params.set('namespace', namespace);
+      if (status && status !== 'all') params.set('status', status);
+      if (search) params.set('search', search);
+
+      const res = await fetch(`/api/k8s/pods?${params.toString()}`);
+      if (!res.ok) throw new Error('Failed to fetch pods');
+      return await res.json();
+    } catch {
+      return { total: 0, pods: [] };
+    }
+  }
+
+  async restartK8sPod(id: string): Promise<{ success: boolean; message: string; pod: PodItem }> {
+    const res = await fetch(`/api/k8s/pods/${encodeURIComponent(id)}/restart`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}) }
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to restart pod');
+    return data;
+  }
+
+  async getK8sPodLogs(id: string): Promise<{ podId: string; name: string; logs: string }> {
+    const res = await fetch(`/api/k8s/pods/${encodeURIComponent(id)}/logs`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to fetch pod logs');
+    return data;
+  }
+
+  async getK8sDeployments(): Promise<{ deployments: K8sDeployment[] }> {
+    try {
+      const res = await fetch('/api/k8s/deployments');
+      if (!res.ok) throw new Error('Failed to fetch deployments');
+      return await res.json();
+    } catch {
+      return { deployments: [] };
+    }
+  }
+
+  async scaleK8sDeployment(name: string, replicas: number): Promise<{ success: boolean; message: string; deployment: K8sDeployment }> {
+    const res = await fetch('/api/k8s/deployments/scale', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}) },
+      body: JSON.stringify({ name, replicas })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to scale deployment');
+    return data;
+  }
+
+  async execK8sCommand(command: string): Promise<{ command: string; output: string; executedAt: string }> {
+    const res = await fetch('/api/k8s/exec', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}) },
+      body: JSON.stringify({ command })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to execute command');
+    return data;
   }
 
   // ------------------------------------

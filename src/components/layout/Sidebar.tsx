@@ -11,9 +11,7 @@ import {
   Cpu, 
   HardDrive,
   X,
-  CreditCard,
   UserRound,
-  LifeBuoy,
   UsersRound,
   Truck
 } from 'lucide-react';
@@ -27,12 +25,10 @@ export type NavTabId =
   | 'alerts' 
   | 'security' 
   | 'observability' 
-  | 'widgets'
-  | 'billing'
-  | 'profile'
-  | 'support'
+  | 'deliveries'
   | 'collaboration'
-  | 'deliveries';
+  | 'profile'
+  | 'widgets';
 
 interface SidebarProps {
   currentTab: NavTabId;
@@ -53,18 +49,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   const navItems: { id: NavTabId; label: string; icon: React.ComponentType<{ className?: string }>; badge?: string }[] = [
     { id: 'overview', label: 'Overview Analytics', icon: LayoutDashboard },
-    { id: 'kubernetes', label: 'Kubernetes Cluster', icon: Layers, badge: '8 Nodes' },
-    { id: 'storage', label: 'AWS S3 Storage', icon: Database, badge: '3 Buckets' },
+    { id: 'kubernetes', label: 'Kubernetes Cluster', icon: Layers, badge: 'EKS v1.31' },
+    { id: 'storage', label: 'AWS S3 Storage', icon: Database, badge: 'Buckets' },
     { id: 'devops', label: 'DevOps & Pipelines', icon: Terminal, badge: 'CI/CD' },
-    { id: 'alerts', label: 'Incidents & Alerts', icon: BellRing, badge: 'SNS/Slack' },
-    { id: 'security', label: 'Security & RBAC', icon: ShieldAlert, badge: 'JWT' },
-    { id: 'observability', label: 'Prometheus & Grafana', icon: Activity },
-    { id: 'widgets', label: 'Widget Layouts', icon: Sliders },
-    { id: 'billing', label: 'Plans & Billing', icon: CreditCard, badge: 'Razorpay' },
-    { id: 'profile', label: 'Profile & Settings', icon: UserRound, badge: 'Account' },
-    { id: 'support', label: 'AI Help & Status', icon: LifeBuoy, badge: '24/7' },
-    { id: 'collaboration', label: 'Team & Versions', icon: UsersRound, badge: 'Sync' },
+    { id: 'alerts', label: 'Incidents & Alerts', icon: BellRing, badge: 'AWS SNS' },
+    { id: 'security', label: 'Security & RBAC', icon: ShieldAlert, badge: 'IAM' },
+    { id: 'observability', label: 'Prometheus & CloudWatch', icon: Activity, badge: 'Live' },
     { id: 'deliveries', label: 'Delivery Tracking', icon: Truck, badge: 'India' },
+    { id: 'collaboration', label: 'Team & Versions', icon: UsersRound, badge: 'Sync' },
+    { id: 'profile', label: 'AWS & Account Settings', icon: UserRound, badge: 'Console' },
+    { id: 'widgets', label: 'Widget Layouts', icon: Sliders },
   ];
 
   return (

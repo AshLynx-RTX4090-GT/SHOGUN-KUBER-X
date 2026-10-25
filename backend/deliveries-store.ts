@@ -44,7 +44,19 @@ const CREATE_TABLE_SQL = `
 `;
 
 export function createDeliveriesStore() {
-  const pool = process.env.DATABASE_URL ? new Pool({ connectionString: process.env.DATABASE_URL, max: 10, ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : undefined }) : null;
+  let pool: Pool | null = null;
+  if (process.env.DATABASE_URL) {
+    try {
+      pool = new Pool({
+        connectionString: process.env.DATABASE_URL,
+        max: 10,
+        ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : undefined,
+      });
+    } catch {
+      console.warn('DB not connected — mock active');
+      pool = null;
+    }
+  }
   let fallback = [...SEED_DELIVERIES];
 
   const toDelivery = (row: Record<string, unknown>): DeliveryEndpoint => ({
@@ -64,26 +76,41 @@ export function createDeliveriesStore() {
 
   const seedDatabase = async () => {
     if (!pool) return;
-    await pool.query(CREATE_TABLE_SQL);
-    const count = await pool.query<{ count: string }>('SELECT COUNT(*)::text AS count FROM delivery_endpoints');
-    if (count.rows[0]?.count !== '0') return;
-    for (const delivery of SEED_DELIVERIES) {
-      await pool.query(
-        `INSERT INTO delivery_endpoints (id, tracking_code, customer_name, city, region, latitude, longitude, status, progress, eta, updated_at, urgent)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-        [delivery.id, delivery.trackingCode, delivery.customerName, delivery.city, delivery.region, delivery.latitude, delivery.longitude, delivery.status, delivery.progress, delivery.eta, delivery.updatedAt, delivery.urgent],
-      );
+    try {
+      await pool.query(CREATE_TABLE_SQL);
+      const count = await pool.query<{ count: string }>('SELECT COUNT(*)::text AS count FROM delivery_endpoints');
+      if (count.rows[0]?.count !== '0') return;
+      for (const delivery of SEED_DELIVERIES) {
+        await pool.query(
+          `INSERT INTO delivery_endpoints (id, tracking_code, customer_name, city, region, latitude, longitude, status, progress, eta, updated_at, urgent)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+          [delivery.id, delivery.trackingCode, delivery.customerName, delivery.city, delivery.region, delivery.latitude, delivery.longitude, delivery.status, delivery.progress, delivery.eta, delivery.updatedAt, delivery.urgent],
+        );
+      }
+    } catch (err) {
+      console.warn('PostgreSQL connection/seed failed — falling back to memory store:', err);
+      pool = null;
     }
   };
 
   return {
     async init() {
-      await seedDatabase();
+      try {
+        await seedDatabase();
+      } catch (err) {
+        console.warn('Database initialization failed, fallback active:', err);
+        pool = null;
+      }
     },
     async list(): Promise<DeliveryEndpoint[]> {
       if (!pool) return fallback;
-      const result = await pool.query('SELECT * FROM delivery_endpoints ORDER BY updated_at DESC');
-      return result.rows.map(toDelivery);
+      try {
+        const result = await pool.query('SELECT * FROM delivery_endpoints ORDER BY updated_at DESC');
+        return result.rows.map(toDelivery);
+      } catch (err) {
+        console.warn('PostgreSQL query failed, falling back to memory store:', err);
+        return fallback;
+      }
     },
     async analytics(): Promise<{ total: number; delivered: number; inTransit: number; delayed: number; averageProgress: number; urgent: number }> {
       const deliveries = await this.list();
@@ -107,8 +134,19 @@ export function createDeliveriesStore() {
         delivery.urgent = status === 'delayed';
         return delivery;
       }
-      const result = await pool.query('UPDATE delivery_endpoints SET status = $1, progress = $2, urgent = $3, updated_at = NOW() WHERE id = $4 RETURNING *', [status, safeProgress, status === 'delayed', id]);
-      return result.rows[0] ? toDelivery(result.rows[0]) : null;
+      try {
+        const result = await pool.query('UPDATE delivery_endpoints SET status = $1, progress = $2, urgent = $3, updated_at = NOW() WHERE id = $4 RETURNING *', [status, safeProgress, status === 'delayed', id]);
+        return result.rows[0] ? toDelivery(result.rows[0]) : null;
+      } catch (err) {
+        console.warn('PostgreSQL update failed, using in-memory store:', err);
+        const delivery = fallback.find(item => item.id === id);
+        if (!delivery) return null;
+        delivery.status = status;
+        delivery.progress = safeProgress;
+        delivery.updatedAt = new Date().toISOString();
+        delivery.urgent = status === 'delayed';
+        return delivery;
+      }
     },
     async create(input: Omit<DeliveryEndpoint, 'id' | 'updatedAt'>): Promise<DeliveryEndpoint> {
       const delivery: DeliveryEndpoint = { ...input, id: randomUUID(), updatedAt: new Date().toISOString() };
@@ -116,12 +154,18 @@ export function createDeliveriesStore() {
         fallback = [delivery, ...fallback];
         return delivery;
       }
-      const result = await pool.query(
-        `INSERT INTO delivery_endpoints (id, tracking_code, customer_name, city, region, latitude, longitude, status, progress, eta, updated_at, urgent)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *`,
-        [delivery.id, delivery.trackingCode, delivery.customerName, delivery.city, delivery.region, delivery.latitude, delivery.longitude, delivery.status, delivery.progress, delivery.eta, delivery.updatedAt, delivery.urgent],
-      );
-      return toDelivery(result.rows[0]);
+      try {
+        const result = await pool.query(
+          `INSERT INTO delivery_endpoints (id, tracking_code, customer_name, city, region, latitude, longitude, status, progress, eta, updated_at, urgent)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *`,
+          [delivery.id, delivery.trackingCode, delivery.customerName, delivery.city, delivery.region, delivery.latitude, delivery.longitude, delivery.status, delivery.progress, delivery.eta, delivery.updatedAt, delivery.urgent],
+        );
+        return toDelivery(result.rows[0]);
+      } catch (err) {
+        console.warn('PostgreSQL insert failed, using in-memory store:', err);
+        fallback = [delivery, ...fallback];
+        return delivery;
+      }
     },
   };
 }

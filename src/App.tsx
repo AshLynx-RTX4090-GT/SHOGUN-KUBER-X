@@ -13,9 +13,7 @@ import { AlertsManager } from './components/alerts/AlertsManager';
 import { RbacManager } from './components/security/RbacManager';
 import { PrometheusGrafana } from './components/observability/PrometheusGrafana';
 import { WidgetCustomizer } from './components/widgets/WidgetCustomizer';
-import { BillingManager } from './components/billing/BillingManager';
 import { ProfileManager } from './components/profile/ProfileManager';
-import { SupportManager } from './components/support/SupportManager';
 import { CollaborationManager } from './components/collaboration/CollaborationManager';
 import { DeliveryDashboard } from './components/deliveries/DeliveryDashboard';
 import { 
@@ -26,7 +24,8 @@ import {
   ClusterInfo, 
   AlertItem, 
   WidgetConfig, 
-  OfflineQueueItem 
+  OfflineQueueItem,
+  AwsConsoleConfig
 } from './types';
 import { api } from './services/api';
 
@@ -48,6 +47,9 @@ export default function App() {
   const [metricHistory, setMetricHistory] = useState<MetricHistoryPoint[]>([]);
   const [clusterInfo, setClusterInfo] = useState<ClusterInfo | null>(null);
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
+
+  // AWS Configuration State
+  const [awsConfig, setAwsConfig] = useState<AwsConsoleConfig | null>(null);
 
   // Settings & Offline State
   const [refreshIntervalMs, setRefreshIntervalMs] = useState<number>(3000);
@@ -80,13 +82,14 @@ export default function App() {
     await initUser(role);
   };
 
-  // Fetch telemetry & alerts
+  // Fetch telemetry, alerts & AWS config
   const fetchData = useCallback(async () => {
     try {
-      const [mRes, hRes, aRes] = await Promise.all([
+      const [mRes, hRes, aRes, awsRes] = await Promise.all([
         api.getCurrentMetrics(),
         api.getMetricsHistory(),
         api.getAlerts(),
+        api.getAwsConfig(),
       ]);
 
       if (mRes) {
@@ -98,6 +101,9 @@ export default function App() {
       }
       if (aRes) {
         setAlerts(aRes.alerts);
+      }
+      if (awsRes) {
+        setAwsConfig(awsRes);
       }
     } catch (err) {
       console.warn('Data fetch warning:', err);
@@ -152,18 +158,16 @@ export default function App() {
 
   const TAB_TITLES: Record<NavTabId, string> = {
     overview: 'Overview Analytics',
-    kubernetes: 'Kubernetes Cluster Monitor',
+    kubernetes: 'Kubernetes Cluster (EKS)',
     storage: 'AWS S3 Storage Manager',
     devops: 'DevOps, Docker & CI/CD Pipelines',
-    alerts: 'Incidents & Alerts Dispatcher',
-    security: 'JWT Security & RBAC',
-    observability: 'Prometheus & Grafana',
-    widgets: 'Widget Layouts & Sync Settings',
-    billing: 'Plans & Billing',
-    profile: 'Profile & Security Settings',
-    support: 'AI Support & Status Center',
-    collaboration: 'Collaboration & Version History',
+    alerts: 'Incidents & Alerts Dispatcher (SNS)',
+    security: 'JWT Security & AWS IAM RBAC',
+    observability: 'Prometheus & CloudWatch',
     deliveries: 'India Delivery Tracking',
+    collaboration: 'Collaboration & Version History',
+    profile: 'AWS Console & Account Settings',
+    widgets: 'Widget Layouts & Sync Settings',
   };
 
   return (
@@ -192,6 +196,8 @@ export default function App() {
         onManualSync={handleManualSync}
         activeAlerts={alerts}
         currentTabTitle={TAB_TITLES[currentTab]}
+        awsRegion={awsConfig?.region}
+        awsAccountId={awsConfig?.accountId}
       />
 
       {/* Responsive App Shell: Vertical Navigation & Main Workspace */}
@@ -239,6 +245,7 @@ export default function App() {
             <KubernetesMonitor
               currentUser={currentUser}
               isDarkMode={isDarkMode}
+              awsConfig={awsConfig}
             />
           )}
 
@@ -247,6 +254,7 @@ export default function App() {
               currentUser={currentUser}
               isDarkMode={isDarkMode}
               isOnline={isOnline}
+              awsConfig={awsConfig}
             />
           )}
 
@@ -295,8 +303,6 @@ export default function App() {
             />
           )}
 
-          {currentTab === 'billing' && <BillingManager />}
-
           {currentTab === 'profile' && (
             <ProfileManager
               currentUser={currentUser}
@@ -305,10 +311,14 @@ export default function App() {
                 localStorage.setItem('shogun_user', JSON.stringify(user));
               }}
               isDarkMode={isDarkMode}
+              awsConfig={awsConfig}
+              onUpdateAwsConfig={async (accId, reg) => {
+                const updated = await api.updateAwsConfig({ accountId: accId, region: reg });
+                setAwsConfig(updated);
+              }}
             />
           )}
 
-          {currentTab === 'support' && <SupportManager />}
           {currentTab === 'collaboration' && <CollaborationManager />}
           {currentTab === 'deliveries' && <DeliveryDashboard isDarkMode={isDarkMode} isOnline={isOnline} />}
           </div>
