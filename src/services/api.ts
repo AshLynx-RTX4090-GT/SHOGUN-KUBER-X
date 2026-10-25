@@ -172,7 +172,7 @@ class ApiService {
     }
   }
 
-  async updateAwsConfig(payload: { accountId?: string; region?: string }): Promise<AwsConsoleConfig> {
+  async updateAwsConfig(payload: { accountId?: string; region?: string; accessKeyId?: string; secretAccessKey?: string }): Promise<AwsConsoleConfig> {
     const res = await fetch('/api/aws/config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}) },
@@ -180,6 +180,25 @@ class ApiService {
     });
     if (!res.ok) throw new Error('Failed to update AWS config');
     return await res.json();
+  }
+
+  async connectAwsIam(payload: { accessKeyId: string; secretAccessKey: string; region?: string; accountId?: string }): Promise<{
+    success: boolean;
+    connected: boolean;
+    message: string;
+    accountId: string;
+    region: string;
+    maskedAccessKey?: string;
+    buckets?: S3Bucket[];
+  }> {
+    const res = await fetch('/api/aws/credentials', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}) },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to connect AWS IAM credentials');
+    return data;
   }
 
   // ------------------------------------

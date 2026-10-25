@@ -325,14 +325,16 @@ export default function App() {
         </main>
       </div>
 
-      <footer className="border-t border-slate-800/70 px-6 py-8 md:px-10 text-center">
-        <div className="text-3xl md:text-5xl font-black tracking-[0.08em] text-cyan-400">Lynx Cloud Co.</div>
-        <div className="mt-3 flex flex-wrap justify-center gap-x-4 gap-y-2 text-xs text-slate-400">
-          <a href="#privacy" className="text-cyan-400 underline underline-offset-2">Privacy</a>
-          <a href="#terms" className="text-amber-400 underline underline-offset-2">Terms</a>
-          <a href="#support" className="text-fuchsia-400 underline underline-offset-2">Support</a>
+      <footer className="border-t border-emerald-900/60 px-6 py-6 md:px-10 text-center bg-[#020b08]">
+        <div className="text-2xl md:text-3xl font-black tracking-[0.08em] text-emerald-400">Lynx Cloud Co.</div>
+        <div className="mt-2 flex flex-wrap justify-center gap-x-4 gap-y-1 text-xs text-emerald-400/80 font-mono">
+          <span className="text-emerald-400">AWS Account: 956083908253</span>
+          <span>·</span>
+          <span className="text-emerald-400">Region: us-east-1</span>
+          <span>·</span>
+          <span className="text-emerald-300">Amazon EKS v1.31 + Amazon S3</span>
         </div>
-        <p className="mt-3 text-[11px] text-slate-500">Disclaimer: Dashboard data is for operational planning and demonstration. &copy; 2026 Lynx Cloud Co. All rights reserved.</p>
+        <p className="mt-2 text-[11px] text-emerald-600 font-mono">Real-Time Kubernetes & AWS S3 Media Control Center. &copy; 2026 Lynx Cloud Co. All rights reserved.</p>
       </footer>
     </div>
   );

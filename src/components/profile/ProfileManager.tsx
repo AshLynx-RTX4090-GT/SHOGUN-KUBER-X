@@ -1,6 +1,7 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { Camera, Check, KeyRound, Mail, ShieldCheck, Smartphone, UserRound, Cloud, ExternalLink, RefreshCw } from 'lucide-react';
 import { User, AwsConsoleConfig } from '../../types';
+import { api } from '../../services/api';
 
 interface ProfileManagerProps {
   currentUser: User | null;
@@ -27,8 +28,12 @@ export const ProfileManager: React.FC<ProfileManagerProps> = ({
   // AWS Configuration State
   const [awsAccountId, setAwsAccountId] = useState(awsConfig?.accountId || '956083908253');
   const [awsRegion, setAwsRegion] = useState(awsConfig?.region || 'us-east-1');
+  const [awsAccessKeyId, setAwsAccessKeyId] = useState('');
+  const [awsSecretAccessKey, setAwsSecretAccessKey] = useState('');
+  const [showSecret, setShowSecret] = useState(false);
   const [isUpdatingAws, setIsUpdatingAws] = useState(false);
   const [awsSaved, setAwsSaved] = useState(false);
+  const [awsFeedback, setAwsFeedback] = useState<string | null>(null);
 
   useEffect(() => {
     if (awsConfig) {
@@ -53,14 +58,29 @@ export const ProfileManager: React.FC<ProfileManagerProps> = ({
   };
 
   const saveAwsSettings = async () => {
-    if (!onUpdateAwsConfig) return;
     setIsUpdatingAws(true);
+    setAwsFeedback(null);
     try {
-      await onUpdateAwsConfig(awsAccountId.trim(), awsRegion);
-      setAwsSaved(true);
-      setTimeout(() => setAwsSaved(false), 3000);
+      if (awsAccessKeyId.trim() && awsSecretAccessKey.trim()) {
+        const res = await api.connectAwsIam({
+          accessKeyId: awsAccessKeyId.trim(),
+          secretAccessKey: awsSecretAccessKey.trim(),
+          accountId: awsAccountId.trim(),
+          region: awsRegion,
+        });
+        setAwsFeedback(res.message);
+        setAwsSaved(true);
+      } else if (onUpdateAwsConfig) {
+        await onUpdateAwsConfig(awsAccountId.trim(), awsRegion);
+        setAwsFeedback('AWS console configuration updated.');
+        setAwsSaved(true);
+      }
+      setTimeout(() => {
+        setAwsSaved(false);
+        setAwsFeedback(null);
+      }, 4000);
     } catch (err) {
-      console.error('Failed to update AWS settings:', err);
+      setAwsFeedback(err instanceof Error ? err.message : 'Failed to connect AWS credentials');
     } finally {
       setIsUpdatingAws(false);
     }
@@ -75,28 +95,35 @@ export const ProfileManager: React.FC<ProfileManagerProps> = ({
       </div>
 
       {/* AWS Account Console Connection Card */}
-      <section className={`glass-panel p-6 rounded-2xl border ${isDarkMode ? 'border-amber-500/30 bg-amber-950/10' : 'border-amber-200 bg-amber-50/40'}`}>
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-700/30">
+      <section className="glass-panel p-6 rounded-2xl border border-emerald-500/40 bg-[#061510]">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-emerald-900/40">
           <div>
-            <h2 className="text-base font-bold text-slate-100 flex items-center gap-2">
-              <Cloud className="w-5 h-5 text-amber-400" />
-              <span>AWS Account Console Integration</span>
+            <h2 className="text-base font-bold text-emerald-100 flex items-center gap-2">
+              <Cloud className="w-5 h-5 text-emerald-400" />
+              <span>Direct AWS Account & IAM Connection</span>
             </h2>
-            <p className="text-xs text-slate-400 mt-1">
-              Connect this dashboard directly to your AWS Account console across Amazon S3, EKS, CloudWatch, and IAM.
+            <p className="text-xs text-emerald-400/80 mt-1">
+              Connect your AWS IAM user credentials directly to manage Amazon S3, EKS clusters, and CloudWatch telemetry.
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <span className="text-xs font-mono px-2.5 py-1 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center gap-1.5">
+            <span className="text-xs font-mono px-2.5 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1.5">
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-              Connected
+              {awsConfig?.hasIamCredentials ? 'IAM Authenticated' : 'Account Configured'}
             </span>
           </div>
         </div>
 
+        {awsFeedback && (
+          <div className="mt-4 p-3 rounded-lg bg-emerald-950/70 border border-emerald-600/60 text-emerald-200 text-xs flex items-center gap-2">
+            <Check className="w-4 h-4 text-emerald-400 shrink-0" />
+            <span>{awsFeedback}</span>
+          </div>
+        )}
+
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
           <div>
-            <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+            <label className="block text-xs font-semibold text-emerald-200 mb-1.5">
               AWS Account ID
             </label>
             <input
@@ -104,19 +131,19 @@ export const ProfileManager: React.FC<ProfileManagerProps> = ({
               value={awsAccountId}
               onChange={e => setAwsAccountId(e.target.value)}
               placeholder="e.g. 956083908253"
-              className="w-full rounded-xl border border-slate-700 bg-slate-950/60 px-3.5 py-2.5 text-sm font-mono text-slate-100 outline-none focus:border-amber-400"
+              className="w-full rounded-xl border border-emerald-800/80 bg-[#030806] px-3.5 py-2.5 text-sm font-mono text-emerald-100 outline-none focus:border-emerald-400"
             />
-            <p className="text-[11px] text-slate-500 mt-1">Used for deep-linking directly to resources in your AWS account console.</p>
+            <p className="text-[11px] text-emerald-500 mt-1">Target AWS Account console identifier.</p>
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+            <label className="block text-xs font-semibold text-emerald-200 mb-1.5">
               Default AWS Region
             </label>
             <select
               value={awsRegion}
               onChange={e => setAwsRegion(e.target.value)}
-              className="w-full rounded-xl border border-slate-700 bg-slate-950/60 px-3.5 py-2.5 text-sm font-mono text-slate-100 outline-none focus:border-amber-400"
+              className="w-full rounded-xl border border-emerald-800/80 bg-[#030806] px-3.5 py-2.5 text-sm font-mono text-emerald-100 outline-none focus:border-emerald-400"
             >
               <option value="us-east-1">us-east-1 (N. Virginia)</option>
               <option value="us-west-2">us-west-2 (Oregon)</option>
@@ -125,51 +152,90 @@ export const ProfileManager: React.FC<ProfileManagerProps> = ({
               <option value="eu-west-1">eu-west-1 (Ireland)</option>
               <option value="ap-southeast-1">ap-southeast-1 (Singapore)</option>
             </select>
-            <p className="text-[11px] text-slate-500 mt-1">Primary region for EKS cluster, S3 buckets, and CloudWatch metrics.</p>
+            <p className="text-[11px] text-emerald-500 mt-1">Primary region for EKS cluster and S3 buckets.</p>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-emerald-200 mb-1.5">
+              AWS Access Key ID
+            </label>
+            <input
+              type="text"
+              value={awsAccessKeyId}
+              onChange={e => setAwsAccessKeyId(e.target.value)}
+              placeholder="AKIAIOSFODNN7EXAMPLE"
+              className="w-full rounded-xl border border-emerald-800/80 bg-[#030806] px-3.5 py-2.5 text-sm font-mono text-emerald-100 outline-none focus:border-emerald-400 placeholder-emerald-800"
+            />
+            <p className="text-[11px] text-emerald-500 mt-1">
+              {awsConfig?.maskedAccessKey ? `Active IAM Key: ${awsConfig.maskedAccessKey}` : 'IAM User access key for direct AWS SDK operations.'}
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-emerald-200 mb-1.5">
+              AWS Secret Access Key
+            </label>
+            <div className="relative">
+              <input
+                type={showSecret ? 'text' : 'password'}
+                value={awsSecretAccessKey}
+                onChange={e => setAwsSecretAccessKey(e.target.value)}
+                placeholder="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+                className="w-full rounded-xl border border-emerald-800/80 bg-[#030806] px-3.5 py-2.5 pr-10 text-sm font-mono text-emerald-100 outline-none focus:border-emerald-400 placeholder-emerald-800"
+              />
+              <button
+                type="button"
+                onClick={() => setShowSecret(!showSecret)}
+                className="absolute right-3 top-2.5 text-xs text-emerald-400 hover:text-emerald-200 cursor-pointer"
+              >
+                {showSecret ? 'Hide' : 'Show'}
+              </button>
+            </div>
+            <p className="text-[11px] text-emerald-500 mt-1">Stored securely in server runtime memory to execute live S3 & EKS commands.</p>
           </div>
         </div>
 
         {/* Quick Console Action Buttons */}
-        <div className="mt-5 pt-4 border-t border-slate-700/30 flex flex-wrap items-center justify-between gap-3">
+        <div className="mt-5 pt-4 border-t border-emerald-900/40 flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs text-slate-400 font-medium">Quick Open:</span>
+            <span className="text-xs text-emerald-400/80 font-medium">Quick Open:</span>
             {awsConfig?.consoleUrls && (
               <>
                 <a
                   href={awsConfig.consoleUrls.s3}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="px-2.5 py-1 rounded-lg text-xs bg-slate-800/80 hover:bg-slate-700 text-slate-200 border border-slate-700 flex items-center gap-1"
+                  className="px-2.5 py-1 rounded-lg text-xs bg-[#04140e] hover:bg-emerald-950 text-emerald-200 border border-emerald-800 flex items-center gap-1 transition-colors"
                 >
                   <span>S3 Console</span>
-                  <ExternalLink className="w-3 h-3 text-slate-400" />
+                  <ExternalLink className="w-3 h-3 text-emerald-400" />
                 </a>
                 <a
                   href={awsConfig.consoleUrls.eks}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="px-2.5 py-1 rounded-lg text-xs bg-slate-800/80 hover:bg-slate-700 text-slate-200 border border-slate-700 flex items-center gap-1"
+                  className="px-2.5 py-1 rounded-lg text-xs bg-[#04140e] hover:bg-emerald-950 text-emerald-200 border border-emerald-800 flex items-center gap-1 transition-colors"
                 >
                   <span>EKS Console</span>
-                  <ExternalLink className="w-3 h-3 text-slate-400" />
+                  <ExternalLink className="w-3 h-3 text-emerald-400" />
                 </a>
                 <a
                   href={awsConfig.consoleUrls.cloudwatch}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="px-2.5 py-1 rounded-lg text-xs bg-slate-800/80 hover:bg-slate-700 text-slate-200 border border-slate-700 flex items-center gap-1"
+                  className="px-2.5 py-1 rounded-lg text-xs bg-[#04140e] hover:bg-emerald-950 text-emerald-200 border border-emerald-800 flex items-center gap-1 transition-colors"
                 >
                   <span>CloudWatch</span>
-                  <ExternalLink className="w-3 h-3 text-slate-400" />
+                  <ExternalLink className="w-3 h-3 text-emerald-400" />
                 </a>
                 <a
                   href={awsConfig.consoleUrls.iam}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="px-2.5 py-1 rounded-lg text-xs bg-slate-800/80 hover:bg-slate-700 text-slate-200 border border-slate-700 flex items-center gap-1"
+                  className="px-2.5 py-1 rounded-lg text-xs bg-[#04140e] hover:bg-emerald-950 text-emerald-200 border border-emerald-800 flex items-center gap-1 transition-colors"
                 >
                   <span>IAM Console</span>
-                  <ExternalLink className="w-3 h-3 text-slate-400" />
+                  <ExternalLink className="w-3 h-3 text-emerald-400" />
                 </a>
               </>
             )}
@@ -178,10 +244,10 @@ export const ProfileManager: React.FC<ProfileManagerProps> = ({
           <button
             onClick={saveAwsSettings}
             disabled={isUpdatingAws}
-            className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold flex items-center gap-2 transition-all shadow-md"
+            className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold flex items-center gap-2 transition-all shadow-md cursor-pointer disabled:opacity-50"
           >
             {isUpdatingAws ? <RefreshCw className="w-4 h-4 animate-spin" /> : awsSaved ? <Check className="w-4 h-4" /> : <Cloud className="w-4 h-4" />}
-            <span>{awsSaved ? 'AWS Settings Saved' : 'Update AWS Parameters'}</span>
+            <span>{awsSaved ? 'Connected to AWS' : 'Connect AWS IAM Account'}</span>
           </button>
         </div>
       </section>

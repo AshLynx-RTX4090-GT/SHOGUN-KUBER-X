@@ -66,7 +66,7 @@ export interface S3MediaObject {
   filename: string;
   size: number;
   mimeType: string;
-  type: 'image' | 'video' | 'audio' | 'document' | 'config';
+  type: 'files' | 'videos' | 'mp3' | 'mp4' | 'image' | 'video' | 'audio' | 'document' | 'config';
   url: string;
   storageClass: 'STANDARD' | 'GLACIER' | 'DEEP_ARCHIVE' | 'INTELLIGENT_TIERING';
   lastModified: string;
@@ -144,6 +144,8 @@ export interface AwsConsoleConfig {
   accountId: string;
   region: string;
   connected: boolean;
+  hasIamCredentials?: boolean;
+  maskedAccessKey?: string | null;
   roleArn?: string;
   regions: string[];
   consoleUrls: {

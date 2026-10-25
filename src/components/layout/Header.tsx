@@ -264,18 +264,14 @@ export const Header: React.FC<HeaderProps> = ({
           )}
         </div>
 
-        {/* Theme Toggle Button */}
-        <button
-          onClick={onToggleDarkMode}
-          aria-label={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
-          className={`p-2 rounded-lg transition-colors ${
-            isDarkMode 
-              ? 'hover:bg-slate-800 text-amber-400' 
-              : 'hover:bg-slate-100 text-slate-600'
-          }`}
+        {/* High-Contrast Dark Green Mode Active */}
+        <div 
+          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-emerald-500/40 bg-emerald-950/50 text-emerald-300 text-xs font-mono shadow-sm"
+          title="High-Contrast Dark Green Cyberpunk Observability Theme Active"
         >
-          {isDarkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
-        </button>
+          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+          <span className="hidden sm:inline">Dark Green</span>
+        </div>
 
         {/* User Account & RBAC Role Switcher */}
         <div className="relative">
